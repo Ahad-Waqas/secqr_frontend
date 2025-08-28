@@ -15,10 +15,11 @@ export interface Branch {
   branchCode: string;
   name: string;
   region: string;
-  type: 'domestic' | 'international';
+  type: 'DOMESTIC' | 'INTERNATIONAL';
   state?: string;
   country?: string;
-  managerId: string;
+  isActive?: boolean;
+  managerId?: string;
   createdAt: string;
   updatedAt: string;
 }

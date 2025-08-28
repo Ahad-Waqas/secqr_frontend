@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Building, Plus, Search, Edit, MapPin, Users, 
-  Calendar, UserCheck, BarChart3
+  Calendar, UserCheck, BarChart3, AlertCircle, Badge, Mail, Phone
 } from 'lucide-react';
-import { User, Branch } from '../types';
-import { apiService } from '../services/api';
+import { User } from '../types';
 import { useUser } from '@/contexts/user-context';
+import { branchApiService, BranchResponseDto, BranchCreateDto, BranchUpdateDto, BackendUser } from '../services/branch-api';
+import { apiService } from '../services/api';
 
 interface BranchManagementProps {
   user: User;
@@ -13,25 +14,24 @@ interface BranchManagementProps {
 
 const BranchManagement: React.FC<BranchManagementProps> = ({ user }) => {
   const { currentUser, setCurrentUser } = useUser();
-  const [branches, setBranches] = useState<Branch[]>([]);
+  const [branches, setBranches] = useState<BranchResponseDto[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
-  const [selectedBranch, setSelectedBranch] = useState<Branch | null>(null);
+  const [showDetailsModal, setShowDetailsModal] = useState(false);
+  const [selectedBranch, setSelectedBranch] = useState<BranchResponseDto | null>(null);
   const [filters, setFilters] = useState({ search: '', region: '' });
-  console.log('Current User in BranchManagement:', currentUser);
+  const [error, setError] = useState<string | null>(null);
   
   // Form state
-  const [branchForm, setBranchForm] = useState({
+  const [branchForm, setBranchForm] = useState<BranchCreateDto>({
     branchCode: '',
     name: '',
     region: '',
-    type: 'domestic' as 'domestic' | 'international',
+    type: 'DOMESTIC',
     state: '',
-    country: '',
-    managerId: ''
-   
+    country: ''
   });
   const [creating, setCreating] = useState(false);
   const [updating, setUpdating] = useState(false);
@@ -41,42 +41,37 @@ const BranchManagement: React.FC<BranchManagementProps> = ({ user }) => {
   useEffect(() => {
     if (canManageBranches) {
       loadBranches();
-      loadUsers();
     }
   }, [canManageBranches]);
-
+  
   const loadBranches = async () => {
     setLoading(true);
+    setError(null);
     try {
-      const data = await apiService.getBranches();
-      setBranches(data);
-    } catch (error) {
+      const branches = await branchApiService.getBranches();
+      console.log('Branch form state:', branches);
+      setBranches(branches);
+    } catch (error: any) {
       console.error('Failed to load branches:', error);
+      setError(error.message || 'Failed to load branches');
     } finally {
       setLoading(false);
-    }
-  };
-
-  const loadUsers = async () => {
-    try {
-      const data = await apiService.getUsers();
-      setUsers(data.filter(u => u.role === 'BRANCH_MANAGER'));
-    } catch (error) {
-      console.error('Failed to load users:', error);
     }
   };
 
   const handleCreateBranch = async (e: React.FormEvent) => {
     e.preventDefault();
     setCreating(true);
+    setError(null);
     
     try {
-      await apiService.createBranch(branchForm);
+      await branchApiService.createBranch(branchForm);
       setShowCreateModal(false);
       resetForm();
       loadBranches();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to create branch:', error);
+      setError(error.message || 'Failed to create branch');
     } finally {
       setCreating(false);
     }
@@ -87,14 +82,21 @@ const BranchManagement: React.FC<BranchManagementProps> = ({ user }) => {
     if (!selectedBranch) return;
     
     setUpdating(true);
+    setError(null);
     try {
-      await apiService.updateBranch(selectedBranch.id, branchForm);
+      const updateData: BranchUpdateDto = {
+        ...branchForm,
+        isActive: selectedBranch.isActive
+      };
+      
+      await branchApiService.updateBranch(selectedBranch.id, updateData);
       setShowEditModal(false);
       setSelectedBranch(null);
       resetForm();
       loadBranches();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to update branch:', error);
+      setError(error.message || 'Failed to update branch');
     } finally {
       setUpdating(false);
     }
@@ -105,34 +107,40 @@ const BranchManagement: React.FC<BranchManagementProps> = ({ user }) => {
       branchCode: '',
       name: '',
       region: '',
-      type: 'domestic',
+      type: 'DOMESTIC',
       state: '',
-      country: '',
-      managerId: ''
+      country: ''
     });
+    setError(null);
   };
 
-  const openEditModal = (branch: Branch) => {
+  const openEditModal = (branch: BranchResponseDto) => {
     setSelectedBranch(branch);
     setBranchForm({
       branchCode: branch.branchCode,
       name: branch.name,
       region: branch.region,
-      type: branch.type || 'domestic',
+      type: branch.type || 'DOMESTIC',
       state: branch.state || '',
-      country: branch.country || '',
-      managerId: branch.managerId || ''
+      country: branch.country || ''
     });
     setShowEditModal(true);
   };
 
-  const getManagerName = (managerId: string) => {
-    const manager = users.find(u => u.id === managerId);
-    return manager ? manager.name : 'Not Assigned';
+  const openDetailsModal = (branch: BranchResponseDto) => {
+    setSelectedBranch(branch);
+    setShowDetailsModal(true);
   };
 
-  const getBranchUserCount = (branchId: string) => {
-    return users.filter(u => u.branchId === branchId).length;
+  const getManagerName = (branch: BranchResponseDto) => {
+    if (branch.manager) {
+      return branch.manager.name || 'Unknown Manager';
+    }
+    return 'Not Assigned';
+  };
+
+  const getBranchUserCount = (branch: BranchResponseDto) => {
+    return branch.userCount || 0;
   };
 
   const filteredBranches = branches.filter(branch => {
@@ -201,7 +209,7 @@ const BranchManagement: React.FC<BranchManagementProps> = ({ user }) => {
             <UserCheck className="h-8 w-8 text-indigo-600 bg-indigo-100 rounded-lg p-2" />
             <div>
               <p className="text-2xl font-bold text-gray-900">
-                {branches.filter(b => b.managerId).length}
+                {branches.filter(b => b.manager).length}
               </p>
               <p className="text-sm text-gray-600">With Managers</p>
             </div>
@@ -213,13 +221,30 @@ const BranchManagement: React.FC<BranchManagementProps> = ({ user }) => {
             <BarChart3 className="h-8 w-8 text-purple-600 bg-purple-100 rounded-lg p-2" />
             <div>
               <p className="text-2xl font-bold text-gray-900">
-                {Math.round(branches.reduce((acc, b) => acc + getBranchUserCount(b.id), 0) / branches.length) || 0}
+                {Math.round(branches.reduce((acc, b) => acc + getBranchUserCount(b), 0) / (branches.length || 1))}
               </p>
               <p className="text-sm text-gray-600">Avg Users/Branch</p>
             </div>
           </div>
         </div>
       </div>
+
+      {/* Error Alert */}
+      {error && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-4 flex items-center space-x-3">
+          <AlertCircle className="h-5 w-5 text-red-600" />
+          <div>
+            <p className="text-sm font-medium text-red-800">Error</p>
+            <p className="text-sm text-red-700">{error}</p>
+          </div>
+          <button
+            onClick={() => setError(null)}
+            className="ml-auto text-red-600 hover:text-red-800"
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       {/* Filters */}
       <div className="bg-white p-4 rounded-lg border border-gray-200">
@@ -257,7 +282,11 @@ const BranchManagement: React.FC<BranchManagementProps> = ({ user }) => {
           </div>
         ) : (
           filteredBranches.map((branch) => (
-            <div key={branch.id} className="bg-white rounded-lg border border-gray-200 p-6 hover:shadow-md transition-shadow">
+            <div 
+              key={branch.id} 
+              className="bg-white rounded-lg border border-gray-200 p-6 hover:shadow-md transition-shadow cursor-pointer"
+              onClick={() => openDetailsModal(branch)}
+            >
               <div className="flex items-start justify-between mb-4">
                 <div className="flex items-center space-x-3">
                   <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center">
@@ -269,7 +298,10 @@ const BranchManagement: React.FC<BranchManagementProps> = ({ user }) => {
                   </div>
                 </div>
                 <button
-                  onClick={() => openEditModal(branch)}
+                  onClick={(e) => {
+                    e.stopPropagation(); // Prevent card click when editing
+                    openEditModal(branch);
+                  }}
                   className="p-1 rounded-lg hover:bg-gray-100"
                 >
                   <Edit className="h-4 w-4 text-gray-400" />
@@ -279,17 +311,17 @@ const BranchManagement: React.FC<BranchManagementProps> = ({ user }) => {
               <div className="space-y-3">
                 <div className="flex items-center space-x-2 text-sm text-gray-600">
                   <MapPin className="h-4 w-4" />
-                  <span>{branch.region} Region • {branch.type || 'domestic'}</span>
+                  <span>{branch.region} Region • {branch.type?.toLowerCase() || 'domestic'}</span>
                 </div>
                 
                 <div className="flex items-center space-x-2 text-sm text-gray-600">
                   <UserCheck className="h-4 w-4" />
-                  <span>Manager: {getManagerName(branch.managerId)}</span>
+                  <span>Manager: {getManagerName(branch)}</span>
                 </div>
                 
                 <div className="flex items-center space-x-2 text-sm text-gray-600">
                   <Users className="h-4 w-4" />
-                  <span>{getBranchUserCount(branch.id)} Users</span>
+                  <span>{getBranchUserCount(branch)} Users</span>
                 </div>
                 
                 <div className="flex items-center space-x-2 text-sm text-gray-500">
@@ -305,8 +337,16 @@ const BranchManagement: React.FC<BranchManagementProps> = ({ user }) => {
       {/* Create Branch Modal */}
       {showCreateModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl p-6 w-full max-w-md">
+          <div className="bg-white rounded-xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
             <h2 className="text-xl font-bold text-gray-900 mb-4">Create New Branch</h2>
+            
+            {error && (
+              <div className="mb-4 bg-red-50 border border-red-200 rounded-lg p-3 flex items-center space-x-2">
+                <AlertCircle className="h-4 w-4 text-red-600" />
+                <span className="text-sm text-red-700">{error}</span>
+              </div>
+            )}
+            
             <form onSubmit={handleCreateBranch} className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">Branch Code</label>
@@ -350,20 +390,20 @@ const BranchManagement: React.FC<BranchManagementProps> = ({ user }) => {
                   value={branchForm.type}
                   onChange={(e) => setBranchForm({ 
                     ...branchForm, 
-                    type: e.target.value as 'domestic' | 'international',
+                    type: e.target.value as 'DOMESTIC' | 'INTERNATIONAL',
                     // Reset state and country when switching to domestic
-                    state: e.target.value === 'domestic' ? '' : branchForm.state,
-                    country: e.target.value === 'domestic' ? '' : branchForm.country
+                    state: e.target.value === 'DOMESTIC' ? '' : branchForm.state,
+                    country: e.target.value === 'DOMESTIC' ? '' : branchForm.country
                   })}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   required
                 >
-                  <option value="domestic">Domestic</option>
-                  <option value="international">International</option>
+                  <option value="DOMESTIC">Domestic</option>
+                  <option value="INTERNATIONAL">International</option>
                 </select>
               </div>
               
-              {branchForm.type === 'international' && (
+              {branchForm.type === 'INTERNATIONAL' && (
                 <>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">State</label>
@@ -438,8 +478,16 @@ const BranchManagement: React.FC<BranchManagementProps> = ({ user }) => {
       {/* Edit Branch Modal */}
       {showEditModal && selectedBranch && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl p-6 w-full max-w-md">
+          <div className="bg-white rounded-xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
             <h2 className="text-xl font-bold text-gray-900 mb-4">Edit Branch</h2>
+            
+            {error && (
+              <div className="mb-4 bg-red-50 border border-red-200 rounded-lg p-3 flex items-center space-x-2">
+                <AlertCircle className="h-4 w-4 text-red-600" />
+                <span className="text-sm text-red-700">{error}</span>
+              </div>
+            )}
+            
             <form onSubmit={handleUpdateBranch} className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">Branch Code</label>
@@ -475,21 +523,66 @@ const BranchManagement: React.FC<BranchManagementProps> = ({ user }) => {
               </div>
               
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Branch Manager</label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Branch Type</label>
                 <select
-                  value={branchForm.managerId}
-                  onChange={(e) => setBranchForm({ ...branchForm, managerId: e.target.value })}
+                  value={branchForm.type}
+                  onChange={(e) => setBranchForm({ 
+                    ...branchForm, 
+                    type: e.target.value as 'DOMESTIC' | 'INTERNATIONAL'
+                  })}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   required
                 >
-                  <option value="">Select a manager...</option>
-                  {users.map(user => (
-                    <option key={user.id} value={user.id}>
-                      {user.name} ({user.username})
-                    </option>
-                  ))}
+                  <option value="DOMESTIC">Domestic</option>
+                  <option value="INTERNATIONAL">International</option>
                 </select>
               </div>
+              
+              {branchForm.type === 'INTERNATIONAL' && (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">State</label>
+                    <input
+                      type="text"
+                      value={branchForm.state}
+                      onChange={(e) => setBranchForm({ ...branchForm, state: e.target.value })}
+                      placeholder="e.g., California"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Country</label>
+                    <select
+                      value={branchForm.country}
+                      onChange={(e) => setBranchForm({ ...branchForm, country: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    >
+                      <option value="">Select a country...</option>
+                      <option value="United States">United States</option>
+                      <option value="Canada">Canada</option>
+                      <option value="United Kingdom">United Kingdom</option>
+                      <option value="Germany">Germany</option>
+                      <option value="France">France</option>
+                      <option value="Japan">Japan</option>
+                      <option value="Australia">Australia</option>
+                      <option value="Singapore">Singapore</option>
+                      <option value="Hong Kong">Hong Kong</option>
+                      <option value="Switzerland">Switzerland</option>
+                      <option value="Netherlands">Netherlands</option>
+                      <option value="Sweden">Sweden</option>
+                      <option value="Norway">Norway</option>
+                      <option value="Denmark">Denmark</option>
+                      <option value="Belgium">Belgium</option>
+                      <option value="Austria">Austria</option>
+                      <option value="Ireland">Ireland</option>
+                      <option value="New Zealand">New Zealand</option>
+                      <option value="South Korea">South Korea</option>
+                      <option value="Taiwan">Taiwan</option>
+                    </select>
+                  </div>
+                </>
+              )}
               
               <div className="flex space-x-3 pt-4">
                 <button
@@ -512,6 +605,269 @@ const BranchManagement: React.FC<BranchManagementProps> = ({ user }) => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Branch Details Modal */}
+      {showDetailsModal && selectedBranch && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-xl font-bold text-gray-900 flex items-center">
+                <Building className="h-6 w-6 mr-2 text-blue-600" />
+                Branch Details
+              </h2>
+              <button
+                onClick={() => {
+                  setShowDetailsModal(false);
+                  setSelectedBranch(null);
+                }}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="space-y-6">
+              {/* Basic Information */}
+              <div className="bg-gray-50 rounded-lg p-4">
+                <h3 className="text-lg font-semibold text-gray-900 mb-4">Basic Information</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-500 mb-1">Branch Name</label>
+                    <p className="text-gray-900 font-medium">{selectedBranch.name}</p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-500 mb-1">Branch Code</label>
+                    <p className="text-gray-900 font-medium">{selectedBranch.branchCode}</p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-500 mb-1">Region</label>
+                    <p className="text-gray-900">{selectedBranch.region}</p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-500 mb-1">Branch Type</label>
+                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                      selectedBranch.type === 'INTERNATIONAL' 
+                        ? 'bg-purple-100 text-purple-800' 
+                        : 'bg-blue-100 text-blue-800'
+                    }`}>
+                      {selectedBranch.type === 'INTERNATIONAL' ? 'International' : 'Domestic'}
+                    </span>
+                  </div>
+                  {selectedBranch.type === 'INTERNATIONAL' && (
+                    <>
+                      {selectedBranch.state && (
+                        <div>
+                          <label className="block text-sm font-medium text-gray-500 mb-1">State</label>
+                          <p className="text-gray-900">{selectedBranch.state}</p>
+                        </div>
+                      )}
+                      {selectedBranch.country && (
+                        <div>
+                          <label className="block text-sm font-medium text-gray-500 mb-1">Country</label>
+                          <p className="text-gray-900">{selectedBranch.country}</p>
+                        </div>
+                      )}
+                    </>
+                  )}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-500 mb-1">Status</label>
+                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                      selectedBranch.isActive 
+                        ? 'bg-green-100 text-green-800' 
+                        : 'bg-red-100 text-red-800'
+                    }`}>
+                      {selectedBranch.isActive ? 'Active' : 'Inactive'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Statistics */}
+              <div className="bg-gray-50 rounded-lg p-4">
+                <h3 className="text-lg font-semibold text-gray-900 mb-4">Statistics</h3>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="bg-white rounded-lg p-4 border border-gray-200">
+                    <div className="flex items-center">
+                      <Users className="h-8 w-8 text-blue-600 bg-blue-100 rounded-lg p-2 mr-3" />
+                      <div>
+                        <p className="text-2xl font-bold text-gray-900">{selectedBranch.userCount || 0}</p>
+                        <p className="text-sm text-gray-600">Total Users</p>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="bg-white rounded-lg p-4 border border-gray-200">
+                    <div className="flex items-center">
+                      <UserCheck className="h-8 w-8 text-emerald-600 bg-emerald-100 rounded-lg p-2 mr-3" />
+                      <div>
+                        <p className="text-2xl font-bold text-gray-900">{selectedBranch.managerCount || 0}</p>
+                        <p className="text-sm text-gray-600">Managers</p>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="bg-white rounded-lg p-4 border border-gray-200">
+                    <div className="flex items-center">
+                      <Calendar className="h-8 w-8 text-indigo-600 bg-indigo-100 rounded-lg p-2 mr-3" />
+                      <div>
+                        <p className="text-sm font-bold text-gray-900">
+                          {new Date(selectedBranch.createdAt).toLocaleDateString()}
+                        </p>
+                        <p className="text-sm text-gray-600">Created</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Branch Manager Information */}
+              {selectedBranch.manager && (
+                <div className="bg-gray-50 rounded-lg p-4">
+                  <h3 className="text-lg font-semibold text-gray-900 mb-4">Branch Manager</h3>
+                  <div className="bg-white rounded-lg p-4 border border-gray-200">
+                    <div className="flex items-center space-x-3">
+                      <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center">
+                        <span className="text-sm font-medium text-blue-600">
+                          {selectedBranch.manager.name?.charAt(0).toUpperCase()}
+                        </span>
+                      </div>
+                      <div>
+                        <p className="font-medium text-gray-900">{selectedBranch.manager.name}</p>
+                        <p className="text-sm text-gray-500">{selectedBranch.manager.email}</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Branch Users */}
+              <div className="bg-gray-50 rounded-lg p-4">
+                <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+                  <Users className="h-5 w-5 mr-2" />
+                  Branch Users ({selectedBranch.users?.length || 0})
+                </h3>
+                {selectedBranch.users && selectedBranch.users.length > 0 ? (
+                  <div className="space-y-3">
+                    {selectedBranch.users.map((user: BackendUser) => (
+                      <div key={user.id} className="bg-white rounded-lg p-4 border border-gray-200">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center space-x-3">
+                            <div className="w-10 h-10 bg-indigo-100 rounded-full flex items-center justify-center">
+                              <span className="text-sm font-medium text-indigo-600">
+                                {user.name?.charAt(0).toUpperCase()}
+                              </span>
+                            </div>
+                            <div>
+                              <p className="font-medium text-gray-900">{user.name}</p>
+                              <div className="flex items-center space-x-2 text-sm text-gray-500">
+                                <Mail className="h-3 w-3" />
+                                <span>{user.email}</span>
+                              </div>
+                              {user.phone && (
+                                <div className="flex items-center space-x-2 text-sm text-gray-500">
+                                  <Phone className="h-3 w-3" />
+                                  <span>{user.phone}</span>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium mb-1 ${
+                              user.role === 'BRANCH_MANAGER' 
+                                ? 'bg-purple-100 text-purple-800' 
+                                : user.role === 'SALES_USER'
+                                ? 'bg-green-100 text-green-800'
+                                : user.role === 'BRANCH_APPROVER'
+                                ? 'bg-orange-100 text-orange-800'
+                                : 'bg-gray-100 text-gray-800'
+                            }`}>
+                              {user.role?.replace('_', ' ') || 'Unknown Role'}
+                            </span>
+                            <div className="flex items-center space-x-1">
+                              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                                user.enabled === true 
+                                  ? 'bg-green-100 text-green-800' 
+                                  : 'bg-red-100 text-red-800'
+                              }`}>
+                                {user.enabled ? 'Active' : 'Inactive'}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-center py-8 text-gray-500">
+                    <Users className="h-12 w-12 mx-auto mb-2 text-gray-300" />
+                    <p>No users assigned to this branch</p>
+                  </div>
+                )}
+              </div> 
+
+              {/* Recent Activity */}
+              <div className="bg-gray-50 rounded-lg p-4">
+                <h3 className="text-lg font-semibold text-gray-900 mb-4">Timeline</h3>
+                <div className="space-y-3">
+                  <div className="flex items-center space-x-3">
+                    <div className="w-2 h-2 bg-blue-600 rounded-full"></div>
+                    <div>
+                      <p className="text-sm font-medium text-gray-900">Branch Created</p>
+                      <p className="text-xs text-gray-500">
+                        {new Date(selectedBranch.createdAt).toLocaleDateString('en-US', {
+                          year: 'numeric',
+                          month: 'long',
+                          day: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit'
+                        })}
+                      </p>
+                    </div>
+                  </div>
+                  {selectedBranch.updatedAt && selectedBranch.updatedAt !== selectedBranch.createdAt && (
+                    <div className="flex items-center space-x-3">
+                      <div className="w-2 h-2 bg-green-600 rounded-full"></div>
+                      <div>
+                        <p className="text-sm font-medium text-gray-900">Last Updated</p>
+                        <p className="text-xs text-gray-500">
+                          {new Date(selectedBranch.updatedAt).toLocaleDateString('en-US', {
+                            year: 'numeric',
+                            month: 'long',
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit'
+                          })}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex space-x-3 pt-6 border-t border-gray-200">
+              <button
+                onClick={() => {
+                  setShowDetailsModal(false);
+                  openEditModal(selectedBranch);
+                }}
+                className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center justify-center"
+              >
+                <Edit className="h-4 w-4 mr-2" />
+                Edit Branch
+              </button>
+              <button
+                onClick={() => {
+                  setShowDetailsModal(false);
+                  setSelectedBranch(null);
+                }}
+                className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+              >
+                Close
+              </button>
+            </div>
           </div>
         </div>
       )}

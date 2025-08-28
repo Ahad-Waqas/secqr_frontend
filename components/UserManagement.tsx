@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { User } from '../types';
 import api from '@/services/axiosInstance';
+import { branchApiService, BranchResponseDto } from '../services/branch-api';
 
 interface UserManagementProps {
   user: User;
@@ -32,12 +33,13 @@ interface UserForm {
 
 const UserManagement: React.FC<UserManagementProps> = ({ user }) => {
   const [users, setUsers] = useState<BackendUser[]>([]);
+  const [branches, setBranches] = useState<BranchResponseDto[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showPasswordResetModal, setShowPasswordResetModal] = useState(false);
   const [selectedUser, setSelectedUser] = useState<BackendUser | null>(null);
-  const [filters, setFilters] = useState({ search: '', role: '', status: '' });
+  const [filters, setFilters] = useState({ search: '', role: '', status: '', branch: '' });
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   
@@ -95,6 +97,17 @@ const UserManagement: React.FC<UserManagementProps> = ({ user }) => {
       setUsers([]); // Ensure users is always an array
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Fetch branches for dropdown
+  const fetchBranches = async () => {
+    try {
+      const branchesData = await branchApiService.getBranches();
+      setBranches(branchesData);
+    } catch (error) {
+      console.error('Error fetching branches:', error);
+      // Don't show error for branches as it's not critical
     }
   };
 
@@ -234,6 +247,7 @@ const UserManagement: React.FC<UserManagementProps> = ({ user }) => {
 
   useEffect(() => {
     fetchUsers();
+    fetchBranches();
   }, []);
 
   // Filter users based on search and filters
@@ -248,7 +262,10 @@ const UserManagement: React.FC<UserManagementProps> = ({ user }) => {
       (filters.status === 'active' && userItem.enabled) ||
       (filters.status === 'inactive' && !userItem.enabled);
     
-    return matchesSearch && matchesRole && matchesStatus;
+    const matchesBranch = !filters.branch || 
+      (userItem.branchId && userItem.branchId.toString() === filters.branch);
+    
+    return matchesSearch && matchesRole && matchesStatus && matchesBranch;
   });
 
   // Get role display name
@@ -262,6 +279,13 @@ const UserManagement: React.FC<UserManagementProps> = ({ user }) => {
       'BRANCH_APPROVER': 'Branch Approver'
     };
     return roleMap[role as keyof typeof roleMap] || role;
+  };
+
+  // Get branch name by ID
+  const getBranchName = (branchId: number | null | undefined) => {
+    if (!branchId) return 'No Branch';
+    const branch = branches.find(b => b.id === branchId);
+    return branch ? `${branch.name} (${branch.branchCode})` : `Branch ID: ${branchId}`;
   };
 
   // Get status badge
@@ -376,6 +400,19 @@ const UserManagement: React.FC<UserManagementProps> = ({ user }) => {
             <option value="active">Active</option>
             <option value="inactive">Inactive</option>
           </select>
+          
+          <select
+            value={filters.branch}
+            onChange={(e) => setFilters({ ...filters, branch: e.target.value })}
+            className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          >
+            <option value="">All Branches</option>
+            {branches.map(branch => (
+              <option key={branch.id} value={branch.id.toString()}>
+                {branch.name} ({branch.branchCode})
+              </option>
+            ))}
+          </select>
         </div>
       </div>
 
@@ -448,7 +485,7 @@ const UserManagement: React.FC<UserManagementProps> = ({ user }) => {
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       <div className="flex items-center">
                         <Building className="h-4 w-4 mr-1" />
-                        {userItem.branchName || userItem.branchId || 'No Branch'}
+                        {getBranchName(userItem.branchId)}
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
@@ -557,14 +594,22 @@ const UserManagement: React.FC<UserManagementProps> = ({ user }) => {
               </div>
               
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Branch ID (Optional)</label>
-                <input
-                  type="text"
+                <label className="block text-sm font-medium text-gray-700 mb-2">Branch</label>
+                <select
                   value={userForm.branchId}
                   onChange={(e) => setUserForm({ ...userForm, branchId: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  placeholder="Enter branch ID (leave empty for admin roles)"
-                />
+                >
+                  <option value="">Select a branch (optional)</option>
+                  {branches.map(branch => (
+                    <option key={branch.id} value={branch.id.toString()}>
+                      {branch.name} ({branch.branchCode}) - {branch.region}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-gray-500 mt-1">
+                  Leave empty for admin roles that don't require a specific branch
+                </p>
               </div>
               
               <div className="flex space-x-3 pt-4">
@@ -649,14 +694,22 @@ const UserManagement: React.FC<UserManagementProps> = ({ user }) => {
               </div>
               
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Branch ID (Optional)</label>
-                <input
-                  type="text"
+                <label className="block text-sm font-medium text-gray-700 mb-2">Branch</label>
+                <select
                   value={userForm.branchId}
                   onChange={(e) => setUserForm({ ...userForm, branchId: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  placeholder="Enter branch ID (leave empty for admin roles)"
-                />
+                >
+                  <option value="">Select a branch (optional)</option>
+                  {branches.map(branch => (
+                    <option key={branch.id} value={branch.id.toString()}>
+                      {branch.name} ({branch.branchCode}) - {branch.region}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-gray-500 mt-1">
+                  Leave empty for admin roles that don't require a specific branch
+                </p>
               </div>
               
               <div className="flex space-x-3 pt-4">

@@ -112,7 +112,7 @@ class ApiService {
     }
     
     // For sales users, show only their QRs
-    if (currentUser?.role === 'sales_user') {
+    if (currentUser?.role === 'SALES_USER') {
       qrs = qrs.filter(qr => qr.allocatedToUserId === currentUser.id);
     }
     
@@ -201,7 +201,7 @@ class ApiService {
     }
     
     // For sales users, show only their requests
-    if (currentUser?.role === 'sales_user') {
+    if (currentUser?.role === 'SALES_USER') {
       requests = requests.filter(r => r.initiatorUserId === currentUser.id);
     }
     
@@ -273,7 +273,7 @@ class ApiService {
       blocked = filteredQRs.filter(q => q.status === 'blocked').length;
       
       // For sales users, further filter to show only their issued QRs
-      if (currentUser?.role === 'sales_user') {
+      if (currentUser?.role === 'SALES_USER') {
         const userIssuedQRs = filteredQRs.filter(q => q.allocatedToUserId === currentUser.id);
         totalQRs = userIssuedQRs.length;
         allocated = userIssuedQRs.filter(q => q.status === 'allocated').length;
@@ -304,7 +304,7 @@ class ApiService {
     
     // Top sellers filtered by branch
     const topSellers = branchId ? 
-      this.getTopSellersByBranch(branchId, currentUser?.role === 'sales_user' ? currentUser.id : undefined) : 
+      this.getTopSellersByBranch(branchId, currentUser?.role === 'SALES_USER' ? currentUser.id : undefined) : 
       this.getTopSellersGlobal();
     
     // Top branches and regions - consistent with actual data
@@ -379,7 +379,7 @@ class ApiService {
 
   private getTopSellersByBranch(branchId: string, currentUserId?: string): { name: string; count: number; branch?: string; userId?: string }[] {
     const branchName = mockBranches.find(b => b.id === branchId)?.name || 'Unknown Branch';
-    let branchUsers = mockUsers.filter(u => u.branchId === branchId && u.role === 'sales_user');
+    let branchUsers = mockUsers.filter(u => u.branchId === branchId && u.role === 'SALES_USER');
     
     // If currentUserId is provided (for sales users), show only their data
     if (currentUserId) {
@@ -403,7 +403,7 @@ class ApiService {
   }
 
   private getTopSellersGlobal(): { name: string; count: number; branch?: string; userId?: string }[] {
-    const salesUsers = mockUsers.filter(u => u.role === 'sales_user');
+    const salesUsers = mockUsers.filter(u => u.role === 'SALES_USER');
     
     return salesUsers.map(user => {
       const branchName = mockBranches.find(b => b.id === user.branchId)?.name || 'Unknown Branch';
@@ -482,7 +482,10 @@ class ApiService {
       branchCode: branchData.branchCode!,
       name: branchData.name!,
       region: branchData.region!,
-      managerId: 'unassigned',
+      type: branchData.type!,
+      state: branchData.state,
+      country: branchData.country,
+      isActive: true,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
@@ -509,6 +512,34 @@ class ApiService {
     return mockBranches[branchIndex];
   }
 
+  async deleteBranch(branchId: string): Promise<void> {
+    const branchIndex = mockBranches.findIndex(b => b.id === branchId);
+    if (branchIndex === -1) throw new Error('Branch not found');
+    
+    // Check if branch has users
+    const branchUsers = mockUsers.filter(u => u.branchId === branchId);
+    if (branchUsers.length > 0) {
+      throw new Error('Cannot delete branch with existing users. Please reassign users first.');
+    }
+    
+    mockBranches.splice(branchIndex, 1);
+    this.logAction('BRANCH_DELETED', 'branch', { branchId });
+  }
+
+  async getDistinctRegions(): Promise<string[]> {
+    const regions = new Set(mockBranches.map(b => b.region));
+    return Array.from(regions);
+  }
+
+  async searchBranches(searchTerm: string): Promise<Branch[]> {
+    const term = searchTerm.toLowerCase();
+    return mockBranches.filter(branch => 
+      branch.name.toLowerCase().includes(term) ||
+      branch.branchCode.toLowerCase().includes(term) ||
+      branch.region.toLowerCase().includes(term)
+    );
+  }
+
   // Branch Inventory Management
   async getBranchInventory(branchId?: string): Promise<BranchInventory[]> {
     const currentUser = this.getCurrentUser();
@@ -520,7 +551,7 @@ class ApiService {
       let totalAllocated, issued, available, returned, blocked;
       
       // For sales users, show only their QRs
-      if (currentUser?.role === 'sales_user' && currentUser.branchId === branch.id) {
+      if (currentUser?.role === 'SALES_USER' && currentUser.branchId === branch.id) {
         const userQRs = branchQRs.filter(qr => qr.allocatedToUserId === currentUser.id);
         totalAllocated = userQRs.length;
         issued = userQRs.filter(qr => qr.status === 'issued').length;
