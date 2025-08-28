@@ -32,10 +32,10 @@ const RequestWorkflow: React.FC<RequestWorkflowProps> = ({ user }) => {
   const [approvalAction, setApprovalAction] = useState<'approve' | 'reject' | 'return'>('approve');
   const [processing, setProcessing] = useState(false);
 
-  const canCreateRequests = user.role === 'request_initiator' || user.role === 'branch_manager';
-  const canApproveRequests = user.role === 'branch_approver' || user.role === 'branch_manager';
-  const isApprover = user.role === 'branch_approver';
-  const isSalesUser = user.role === 'sales_user';
+  const canCreateRequests = user.role === 'request_initiator' || user.role === 'BRANCH_MANAGER';
+  const canApproveRequests = user.role === 'BRANCH_APPROVER' || user.role === 'BRANCH_MANAGER';
+  const isApprover = user.role === 'BRANCH_APPROVER';
+  const isSalesUser = user.role === 'SALES_USER';
 
   useEffect(() => {
     loadRequests();

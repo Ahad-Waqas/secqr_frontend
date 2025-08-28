@@ -96,8 +96,11 @@ class UserApiService {
   }
 
   // Reset password
-  async resetPassword(userId: number, newPassword: string): Promise<void> {
-    await api.put(`/users/${userId}/reset-password`, { newPassword });
+  async resetPassword(email: string, newPassword: string): Promise<void> {
+    await api.post('/users/reset-password', { 
+      email, 
+      newPassword 
+    });
   }
 
   // Get all users (legacy method for compatibility)

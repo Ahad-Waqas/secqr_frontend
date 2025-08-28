@@ -314,9 +314,19 @@ export default function UserManagement() {
     }
     
     try {
-      const response = await api.put(`/users/${selectedUser.id}/reset-password`, {
+      // Debug logging
+      console.log('Attempting password reset for:', {
+        email: passwordResetForm.email,
+        passwordLength: passwordResetForm.newPassword.length
+      });
+      
+      // Use the correct endpoint and payload format for admin password reset
+      const response = await api.post('/users/reset-password', {
+        email: passwordResetForm.email,
         newPassword: passwordResetForm.newPassword
       });
+      
+      console.log('Password reset response:', response.status, response.data);
       
       if (response.status === 200) {
         setSuccess('Password reset successfully');
@@ -325,6 +335,7 @@ export default function UserManagement() {
         resetForm();
       }
     } catch (error: any) {
+      console.error('Password reset error:', error.response?.data || error);
       setError(error.response?.data?.message || 'Failed to reset password');
     }
   };
