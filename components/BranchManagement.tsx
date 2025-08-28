@@ -7,14 +7,34 @@ import { User } from '../types';
 import { useUser } from '@/contexts/user-context';
 import { branchApiService, BranchResponseDto, BranchCreateDto, BranchUpdateDto, BackendUser } from '../services/branch-api';
 import { apiService } from '../services/api';
+import {
+  Pagination,
+  PaginationContent,
+  PaginationEllipsis,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
 
 interface BranchManagementProps {
   user: User;
 }
 
+interface PaginatedResponse<T> {
+  content: T[];
+  totalElements: number;
+  totalPages: number;
+  size: number;
+  number: number;
+  first: boolean;
+  last: boolean;
+  numberOfElements: number;
+}
+
 const BranchManagement: React.FC<BranchManagementProps> = ({ user }) => {
   const { currentUser, setCurrentUser } = useUser();
-  const [branches, setBranches] = useState<BranchResponseDto[]>([]);
+  const [branchesData, setBranchesData] = useState<PaginatedResponse<BranchResponseDto> | null>(null);
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -23,6 +43,12 @@ const BranchManagement: React.FC<BranchManagementProps> = ({ user }) => {
   const [selectedBranch, setSelectedBranch] = useState<BranchResponseDto | null>(null);
   const [filters, setFilters] = useState({ search: '', region: '' });
   const [error, setError] = useState<string | null>(null);
+  
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(0);
+  const [pageSize, setPageSize] = useState(20);
+  const [sortBy, setSortBy] = useState('name');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   
   // Form state
   const [branchForm, setBranchForm] = useState<BranchCreateDto>({
@@ -42,15 +68,41 @@ const BranchManagement: React.FC<BranchManagementProps> = ({ user }) => {
     if (canManageBranches) {
       loadBranches();
     }
-  }, [canManageBranches]);
+  }, [canManageBranches, currentPage, pageSize, sortBy, sortDir, filters.search, filters.region]);
   
   const loadBranches = async () => {
     setLoading(true);
     setError(null);
     try {
-      const branches = await branchApiService.getBranches();
-      console.log('Branch form state:', branches);
-      setBranches(branches);
+      let response;
+      
+      if (filters.search.trim()) {
+        // Use search API when there's a search term
+        response = await branchApiService.searchBranchesPaginated(
+          filters.search.trim(),
+          currentPage,
+          pageSize,
+          sortBy,
+          sortDir
+        );
+      } else {
+        // Use regular paginated API
+        response = await branchApiService.getBranchesPaginated(
+          currentPage,
+          pageSize,
+          sortBy,
+          sortDir
+        );
+      }
+      
+      setBranchesData(response);
+      
+      console.log('Paginated branches loaded:', {
+        totalElements: response.totalElements,
+        totalPages: response.totalPages,
+        currentPage: response.number,
+        size: response.size
+      });
     } catch (error: any) {
       console.error('Failed to load branches:', error);
       setError(error.message || 'Failed to load branches');
@@ -143,17 +195,53 @@ const BranchManagement: React.FC<BranchManagementProps> = ({ user }) => {
     return branch.userCount || 0;
   };
 
-  const filteredBranches = branches.filter(branch => {
-    const matchesSearch = !filters.search || 
-      branch.name.toLowerCase().includes(filters.search.toLowerCase()) ||
-      branch.branchCode.toLowerCase().includes(filters.search.toLowerCase());
-    
+  const filteredBranches = branchesData?.content?.filter(branch => {
+    // Client-side filtering for region only (search is handled server-side)
     const matchesRegion = !filters.region || branch.region === filters.region;
-    
-    return matchesSearch && matchesRegion;
-  });
+    return matchesRegion;
+  }) || [];
 
-  const uniqueRegions = [...new Set(branches.map(b => b.region))];
+  const handlePageChange = (page: number) => {
+    setCurrentPage(page);
+  };
+
+  const handlePageSizeChange = (newSize: number) => {
+    setPageSize(newSize);
+    setCurrentPage(0); // Reset to first page when changing page size
+  };
+
+  const handleSortChange = (field: string) => {
+    if (sortBy === field) {
+      setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortBy(field);
+      setSortDir('asc');
+    }
+    setCurrentPage(0); // Reset to first page when sorting changes
+  };
+
+  const handleSearchChange = (searchValue: string) => {
+    setFilters({ ...filters, search: searchValue });
+    setCurrentPage(0); // Reset to first page when search changes
+  };
+
+  // Load regions for filter dropdown
+  const [uniqueRegions, setUniqueRegions] = useState<string[]>([]);
+
+  useEffect(() => {
+    const loadRegions = async () => {
+      try {
+        const regions = await branchApiService.getDistinctRegions();
+        setUniqueRegions(regions);
+      } catch (error) {
+        console.error('Failed to load regions:', error);
+      }
+    };
+    
+    if (canManageBranches) {
+      loadRegions();
+    }
+  }, [canManageBranches]);
 
   if (!canManageBranches) {
     return (
@@ -188,7 +276,7 @@ const BranchManagement: React.FC<BranchManagementProps> = ({ user }) => {
           <div className="flex items-center space-x-3">
             <Building className="h-8 w-8 text-blue-600 bg-blue-100 rounded-lg p-2" />
             <div>
-              <p className="text-2xl font-bold text-gray-900">{branches.length}</p>
+              <p className="text-2xl font-bold text-gray-900">{branchesData?.totalElements || 0}</p>
               <p className="text-sm text-gray-600">Total Branches</p>
             </div>
           </div>
@@ -209,9 +297,9 @@ const BranchManagement: React.FC<BranchManagementProps> = ({ user }) => {
             <UserCheck className="h-8 w-8 text-indigo-600 bg-indigo-100 rounded-lg p-2" />
             <div>
               <p className="text-2xl font-bold text-gray-900">
-                {branches.filter(b => b.manager).length}
+                {branchesData?.content?.filter(b => b.manager).length || 0}
               </p>
-              <p className="text-sm text-gray-600">With Managers</p>
+              <p className="text-sm text-gray-600">With Managers (Current Page)</p>
             </div>
           </div>
         </div>
@@ -221,9 +309,11 @@ const BranchManagement: React.FC<BranchManagementProps> = ({ user }) => {
             <BarChart3 className="h-8 w-8 text-purple-600 bg-purple-100 rounded-lg p-2" />
             <div>
               <p className="text-2xl font-bold text-gray-900">
-                {Math.round(branches.reduce((acc, b) => acc + getBranchUserCount(b), 0) / (branches.length || 1))}
+                {branchesData?.content && branchesData.content.length > 0 
+                  ? Math.round(branchesData.content.reduce((acc, b) => acc + getBranchUserCount(b), 0) / branchesData.content.length) 
+                  : 0}
               </p>
-              <p className="text-sm text-gray-600">Avg Users/Branch</p>
+              <p className="text-sm text-gray-600">Avg Users/Branch (Current Page)</p>
             </div>
           </div>
         </div>
@@ -248,29 +338,87 @@ const BranchManagement: React.FC<BranchManagementProps> = ({ user }) => {
 
       {/* Filters */}
       <div className="bg-white p-4 rounded-lg border border-gray-200">
-        <div className="flex items-center space-x-4">
-          <div className="flex-1">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
-              <input
-                type="text"
-                placeholder="Search branches..."
-                value={filters.search}
-                onChange={(e) => setFilters({ ...filters, search: e.target.value })}
-                className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent w-full"
-              />
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center space-x-4 flex-1">
+            <div className="flex-1">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+                <input
+                  type="text"
+                  placeholder="Search branches..."
+                  value={filters.search}
+                  onChange={(e) => handleSearchChange(e.target.value)}
+                  className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent w-full"
+                />
+              </div>
             </div>
+            <select
+              value={filters.region}
+              onChange={(e) => setFilters({ ...filters, region: e.target.value })}
+              className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            >
+              <option value="">All Regions</option>
+              {uniqueRegions.map(region => (
+                <option key={region} value={region}>{region}</option>
+              ))}
+            </select>
           </div>
-          <select
-            value={filters.region}
-            onChange={(e) => setFilters({ ...filters, region: e.target.value })}
-            className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-          >
-            <option value="">All Regions</option>
-            {uniqueRegions.map(region => (
-              <option key={region} value={region}>{region}</option>
-            ))}
-          </select>
+          
+          <div className="flex items-center space-x-2 ml-4">
+            <label className="text-sm text-gray-600">Show:</label>
+            <select
+              value={pageSize}
+              onChange={(e) => handlePageSizeChange(Number(e.target.value))}
+              className="px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+            >
+              <option value={10}>10</option>
+              <option value={20}>20</option>
+              <option value={50}>50</option>
+              <option value={100}>100</option>
+            </select>
+            <span className="text-sm text-gray-600">per page</span>
+          </div>
+        </div>
+        
+        <div className="flex items-center justify-between text-sm text-gray-600">
+          <div>
+            Showing {Math.min((currentPage * pageSize) + 1, branchesData?.totalElements || 0)} to {Math.min((currentPage + 1) * pageSize, branchesData?.totalElements || 0)} of {branchesData?.totalElements || 0} branches
+          </div>
+          <div className="flex items-center space-x-2">
+            <span>Sort by:</span>
+            <button
+              onClick={() => handleSortChange('name')}
+              className={`px-2 py-1 rounded text-xs ${
+                sortBy === 'name' ? 'bg-blue-100 text-blue-800' : 'hover:bg-gray-100'
+              }`}
+            >
+              Name {sortBy === 'name' && (sortDir === 'asc' ? '↑' : '↓')}
+            </button>
+            <button
+              onClick={() => handleSortChange('branchCode')}
+              className={`px-2 py-1 rounded text-xs ${
+                sortBy === 'branchCode' ? 'bg-blue-100 text-blue-800' : 'hover:bg-gray-100'
+              }`}
+            >
+              Code {sortBy === 'branchCode' && (sortDir === 'asc' ? '↑' : '↓')}
+            </button>
+            <button
+              onClick={() => handleSortChange('region')}
+              className={`px-2 py-1 rounded text-xs ${
+                sortBy === 'region' ? 'bg-blue-100 text-blue-800' : 'hover:bg-gray-100'
+              }`}
+            >
+              Region {sortBy === 'region' && (sortDir === 'asc' ? '↑' : '↓')}
+            </button>
+            <button
+              onClick={() => handleSortChange('createdAt')}
+              className={`px-2 py-1 rounded text-xs ${
+                sortBy === 'createdAt' ? 'bg-blue-100 text-blue-800' : 'hover:bg-gray-100'
+              }`}
+            >
+              Created {sortBy === 'createdAt' && (sortDir === 'asc' ? '↑' : '↓')}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -279,6 +427,14 @@ const BranchManagement: React.FC<BranchManagementProps> = ({ user }) => {
         {loading ? (
           <div className="col-span-full flex items-center justify-center h-64">
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+          </div>
+        ) : filteredBranches.length === 0 ? (
+          <div className="col-span-full text-center py-12">
+            <Building className="mx-auto h-12 w-12 text-gray-400 mb-4" />
+            <h3 className="text-lg font-medium text-gray-900 mb-2">No branches found</h3>
+            <p className="text-gray-600">
+              {filters.search ? 'Try adjusting your search criteria' : 'No branches available'}
+            </p>
           </div>
         ) : (
           filteredBranches.map((branch) => (
@@ -333,6 +489,71 @@ const BranchManagement: React.FC<BranchManagementProps> = ({ user }) => {
           ))
         )}
       </div>
+
+      {/* Pagination Controls */}
+      {!loading && branchesData && (
+        <div className="flex items-center justify-center mt-8">
+          <Pagination>
+            <PaginationContent>
+              <PaginationItem>
+                <PaginationPrevious 
+                  onClick={() => branchesData.number > 0 && handlePageChange(branchesData.number - 1)}
+                  className={branchesData.number === 0 ? 'pointer-events-none opacity-50 cursor-not-allowed' : 'cursor-pointer'}
+                />
+              </PaginationItem>
+              
+              {/* Page numbers */}
+              {Array.from({ length: Math.min(5, branchesData.totalPages) }, (_, i) => {
+                let pageNum;
+                if (branchesData.totalPages <= 5) {
+                  pageNum = i;
+                } else if (branchesData.number <= 2) {
+                  pageNum = i;
+                } else if (branchesData.number >= branchesData.totalPages - 3) {
+                  pageNum = branchesData.totalPages - 5 + i;
+                } else {
+                  pageNum = branchesData.number - 2 + i;
+                }
+                
+                return (
+                  <PaginationItem key={pageNum}>
+                    <PaginationLink
+                      onClick={() => handlePageChange(pageNum)}
+                      isActive={branchesData.number === pageNum}
+                      className="cursor-pointer"
+                    >
+                      {pageNum + 1}
+                    </PaginationLink>
+                  </PaginationItem>
+                );
+              })}
+              
+              {branchesData.totalPages > 5 && branchesData.number < branchesData.totalPages - 3 && (
+                <>
+                  <PaginationItem>
+                    <PaginationEllipsis />
+                  </PaginationItem>
+                  <PaginationItem>
+                    <PaginationLink
+                      onClick={() => handlePageChange(branchesData.totalPages - 1)}
+                      className="cursor-pointer"
+                    >
+                      {branchesData.totalPages}
+                    </PaginationLink>
+                  </PaginationItem>
+                </>
+              )}
+              
+              <PaginationItem>
+                <PaginationNext 
+                  onClick={() => branchesData.number < branchesData.totalPages - 1 && handlePageChange(branchesData.number + 1)}
+                  className={branchesData.number === branchesData.totalPages - 1 ? 'pointer-events-none opacity-50 cursor-not-allowed' : 'cursor-pointer'}
+                />
+              </PaginationItem>
+            </PaginationContent>
+          </Pagination>
+        </div>
+      )}
 
       {/* Create Branch Modal */}
       {showCreateModal && (

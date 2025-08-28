@@ -14,6 +14,18 @@ export interface BackendUser {
   phone?: string;
 }
 
+// Paginated Response interface
+export interface PagedResponse<T> {
+  content: T[];
+  totalElements: number;
+  totalPages: number;
+  size: number;
+  number: number;
+  first: boolean;
+  last: boolean;
+  numberOfElements: number;
+}
+
 export interface BranchCreateDto {
   branchCode: string;
   name: string;
@@ -52,7 +64,7 @@ export interface BranchResponseDto {
 
 export class BranchApiService {
   /**
-   * Get all branches
+   * Get all branches (legacy method for compatibility)
    */
   async getBranches(): Promise<BranchResponseDto[]> {
     const response = await api.get('/branches');
@@ -60,6 +72,32 @@ export class BranchApiService {
       return response.data.data;
     }
     throw new Error(response.data.message || 'Failed to fetch branches');
+  }
+
+  /**
+   * Get all branches with pagination
+   */
+  async getBranchesPaginated(page: number = 0, size: number = 20, sortBy: string = 'name', sortDir: string = 'asc'): Promise<PagedResponse<BranchResponseDto>> {
+    const response = await api.get('/branches/paginated', {
+      params: { page, size, sortBy, sortDir }
+    });
+    if (response.data.success) {
+      return response.data.data;
+    }
+    throw new Error(response.data.message || 'Failed to fetch branches');
+  }
+
+  /**
+   * Search branches with pagination
+   */
+  async searchBranchesPaginated(searchTerm: string, page: number = 0, size: number = 20, sortBy: string = 'name', sortDir: string = 'asc'): Promise<PagedResponse<BranchResponseDto>> {
+    const response = await api.get('/branches/paginated/search', {
+      params: { q: searchTerm, page, size, sortBy, sortDir }
+    });
+    if (response.data.success) {
+      return response.data.data;
+    }
+    throw new Error(response.data.message || 'Failed to search branches');
   }
 
   /**

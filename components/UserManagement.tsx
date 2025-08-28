@@ -1,54 +1,79 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Users, Plus, Search, Edit, Trash2, 
-  UserCheck, UserX, Building, Mail, Calendar, Key, AlertCircle
+  UserCheck, UserX, Building, Mail, Calendar, Key, AlertCircle,
+  ArrowUpDown, ChevronUp, ChevronDown
 } from 'lucide-react';
 import { User } from '../types';
-import api from '@/services/axiosInstance';
+import { useDebounce } from '@/hooks/useDebounce';
+import api from '../services/axiosInstance';
 import { branchApiService, BranchResponseDto } from '../services/branch-api';
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
 
-interface UserManagementProps {
-  user: User;
-}
-
+// Backend User interface
 interface BackendUser {
   id: number;
   name: string;
   email: string;
-  role: 'SUPER_ADMIN' | 'ADMIN' | 'AUDITOR' | 'BRANCH_MANAGER' | 'SALES_USER' | 'BRANCH_APPROVER';
-  branchId?: number | null;
-  branchName?: string | null;
+  role: string;
   enabled: boolean;
+  branchId?: number;
+  branchName?: string;
   createdAt: string;
-  updatedAt: string;
+  updatedAt?: string;
 }
 
-interface UserForm {
-  name: string;
-  email: string;
-  password: string;
-  role: 'SUPER_ADMIN' | 'ADMIN' | 'AUDITOR' | 'BRANCH_MANAGER' | 'SALES_USER' | 'BRANCH_APPROVER';
-  branchId: string; // Keep as string for input field, convert to number when sending to API
+// Paginated response interface matching your API response
+interface PaginatedUserResponse {
+  content: BackendUser[];
+  pageInfo: {
+    pageNumber: number;
+    pageSize: number;
+    totalElements: number;
+    totalPages: number;
+    first: boolean;
+    last: boolean;
+    hasNext: boolean;
+    hasPrevious: boolean;
+  };
 }
 
-const UserManagement: React.FC<UserManagementProps> = ({ user }) => {
-  const [users, setUsers] = useState<BackendUser[]>([]);
+export default function UserManagement() {
+  // State management
+  const [usersData, setUsersData] = useState<PaginatedUserResponse | null>(null);
   const [branches, setBranches] = useState<BranchResponseDto[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(0);
+  const [pageSize, setPageSize] = useState(10);
+  const [sortBy, setSortBy] = useState('name');
+  const [sortDir, setSortDir] = useState('asc');
+
+  // Filter and search state
+  const [filters, setFilters] = useState({ search: '', role: '', status: '', branch: '' });
+  const debouncedSearch = useDebounce(filters.search, 500);
+
+  // Form states
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showPasswordResetModal, setShowPasswordResetModal] = useState(false);
   const [selectedUser, setSelectedUser] = useState<BackendUser | null>(null);
-  const [filters, setFilters] = useState({ search: '', role: '', status: '', branch: '' });
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
   
-  // Form state
-  const [userForm, setUserForm] = useState<UserForm>({
+  const [userForm, setUserForm] = useState({
     name: '',
     email: '',
     password: '',
-    role: 'SALES_USER',
+    role: 'USER',
     branchId: ''
   });
 
@@ -58,62 +83,111 @@ const UserManagement: React.FC<UserManagementProps> = ({ user }) => {
     confirmPassword: ''
   });
 
-  const resetForm = () => {
-    setUserForm({
-      name: '',
-      email: '',
-      password: '',
-      role: 'SALES_USER',
-      branchId: ''
-    });
+  // Clear alerts
+  const clearAlerts = () => {
     setError('');
     setSuccess('');
   };
 
-  // Fetch users from backend
+  // Fetch users from backend with pagination
   const fetchUsers = async () => {
     try {
       setLoading(true);
-      const response = await api.get('/users');
-      console.log('API Response:', response.data);
+      
+      const response = await api.get('/users/paginated', {
+        params: {
+          page: currentPage,
+          size: pageSize,
+          sortBy,
+          sortDir,
+          ...(debouncedSearch && { search: debouncedSearch }),
+          ...(filters.role && { role: filters.role }),
+          ...(filters.status && { status: filters.status }),
+          ...(filters.branch && { branchId: filters.branch })
+        }
+      });
+      
+      console.log('Paginated API Response:', response.data);
       
       // Handle ApiResponse wrapper structure
-      if (response.data && response.data.success && Array.isArray(response.data.data)) {
-        console.log('Users from ApiResponse.data:', response.data.data);
-        setUsers(response.data.data);
-      } else if (Array.isArray(response.data)) {
-        console.log('Users from direct array:', response.data);
-        setUsers(response.data);
-      } else if (response.data && Array.isArray(response.data.users)) {
-        console.log('Users from data.users:', response.data.users);
-        setUsers(response.data.users);
+      if (response.data && response.data.success && response.data.data) {
+        const paginatedData = response.data.data;
+        console.log('Paginated users:', paginatedData);
+        
+        setUsersData(paginatedData);
       } else {
-        console.warn('No users array found in response:', response.data);
-        setUsers([]);
+        console.warn('Unexpected response structure:', response.data);
+        setUsersData(null);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error fetching users:', error);
-      setError('Failed to fetch users');
-      setUsers([]); // Ensure users is always an array
+      setError('Failed to load users: ' + (error.response?.data?.message || error.message));
+      setUsersData(null);
     } finally {
       setLoading(false);
     }
   };
 
-  // Fetch branches for dropdown
+  // Fetch branches
   const fetchBranches = async () => {
     try {
       const branchesData = await branchApiService.getBranches();
       setBranches(branchesData);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error fetching branches:', error);
-      // Don't show error for branches as it's not critical
+      setError('Failed to load branches');
     }
+  };
+
+  useEffect(() => {
+    fetchUsers();
+    fetchBranches();
+  }, [currentPage, pageSize, sortBy, sortDir, debouncedSearch, filters.role, filters.status, filters.branch]);
+
+  // Users are already filtered and paginated from server
+  const filteredUsers = usersData?.content || [];
+
+  // Get role display name
+  const getRoleDisplayName = (role: string) => {
+    const roleMap = {
+      'SUPER_ADMIN': 'Super Administrator',
+      'ADMIN': 'Administrator', 
+      'BRANCH_MANAGER': 'Branch Manager',
+      'BRANCH_APPROVER': 'Branch Approver',
+      'AUDITOR': 'Auditor',
+      'SALES_USER': 'Sales User',
+      'USER': 'User'
+    };
+    return roleMap[role as keyof typeof roleMap] || role;
+  };
+
+  // Get branch name
+  const getBranchName = (branchId: number) => {
+    const branch = branches.find(b => b.id === branchId);
+    return branch ? branch.name : `Branch ${branchId}`;
+  };
+
+  // Reset form
+  const resetForm = () => {
+    setUserForm({
+      name: '',
+      email: '',
+      password: '',
+      role: 'USER',
+      branchId: ''
+    });
+    setPasswordResetForm({
+      email: '',
+      newPassword: '',
+      confirmPassword: ''
+    });
   };
 
   // Create user
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
+    clearAlerts();
+    
     try {
       const response = await api.post('/users', {
         name: userForm.name,
@@ -238,125 +312,42 @@ const UserManagement: React.FC<UserManagementProps> = ({ user }) => {
         setSuccess('Password reset successfully');
         setShowPasswordResetModal(false);
         setSelectedUser(null);
-        setPasswordResetForm({ email: '', newPassword: '', confirmPassword: '' });
+        resetForm();
       }
     } catch (error: any) {
       setError(error.response?.data?.message || 'Failed to reset password');
     }
   };
 
-  useEffect(() => {
-    fetchUsers();
-    fetchBranches();
-  }, []);
-
-  // Filter users based on search and filters
-  const filteredUsers = (users || []).filter(userItem => {
-    const matchesSearch = !filters.search || 
-      userItem.name.toLowerCase().includes(filters.search.toLowerCase()) ||
-      userItem.email.toLowerCase().includes(filters.search.toLowerCase());
-    
-    const matchesRole = !filters.role || userItem.role === filters.role;
-    
-    const matchesStatus = !filters.status || 
-      (filters.status === 'active' && userItem.enabled) ||
-      (filters.status === 'inactive' && !userItem.enabled);
-    
-    const matchesBranch = !filters.branch || 
-      (userItem.branchId && userItem.branchId.toString() === filters.branch);
-    
-    return matchesSearch && matchesRole && matchesStatus && matchesBranch;
-  });
-
-  // Get role display name
-  const getRoleDisplayName = (role: string) => {
-    const roleMap = {
-      'SUPER_ADMIN': 'Super Administrator',
-      'ADMIN': 'Administrator',
-      'AUDITOR': 'Auditor',
-      'BRANCH_MANAGER': 'Branch Manager',
-      'SALES_USER': 'Sales User',
-      'BRANCH_APPROVER': 'Branch Approver'
-    };
-    return roleMap[role as keyof typeof roleMap] || role;
-  };
-
-  // Get branch name by ID
-  const getBranchName = (branchId: number | null | undefined) => {
-    if (!branchId) return 'No Branch';
-    const branch = branches.find(b => b.id === branchId);
-    return branch ? `${branch.name} (${branch.branchCode})` : `Branch ID: ${branchId}`;
-  };
-
-  // Get status badge
-  const getStatusBadge = (enabled: boolean) => {
-    return (
-      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-        enabled 
-          ? 'bg-green-100 text-green-800' 
-          : 'bg-red-100 text-red-800'
-      }`}>
-        {enabled ? (
-          <>
-            <UserCheck className="w-3 h-3 mr-1" />
-            Active
-          </>
-        ) : (
-          <>
-            <UserX className="w-3 h-3 mr-1" />
-            Inactive
-          </>
-        )}
-      </span>
-    );
-  };
-
-  // Permission check
-  const canManageUsers = user?.role === 'SUPER_ADMIN';
-
-  if (!canManageUsers) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="text-center">
-          <AlertCircle className="h-12 w-12 text-red-500 mx-auto mb-4" />
-          <h3 className="text-lg font-medium text-gray-900 mb-2">Access Denied</h3>
-          <p className="text-gray-500">You don't have permission to manage users.</p>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <div className="p-6">
-      {/* Header */}
-      <div className="flex justify-between items-center mb-6">
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 flex items-center">
-            <Users className="h-8 w-8 mr-3 text-blue-600" />
-            User Management
-          </h1>
-          <p className="text-gray-600 mt-1">Manage system users and their permissions</p>
+          <h1 className="text-2xl font-bold text-gray-900">User Management</h1>
+          <p className="text-gray-600">Manage system users and their permissions</p>
         </div>
         <button
           onClick={() => {
-            resetForm();
+            clearAlerts();
             setShowCreateModal(true);
           }}
-          className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 flex items-center"
+          className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 flex items-center gap-2"
         >
-          <Plus className="h-5 w-5 mr-2" />
+          <Plus className="h-5 w-5" />
           Add User
         </button>
       </div>
 
-      {/* Error/Success Messages */}
+      {/* Alerts */}
       {error && (
-        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
+        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg flex items-center">
+          <AlertCircle className="h-5 w-5 mr-2" />
           {error}
         </div>
       )}
+      
       {success && (
-        <div className="bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded mb-4">
+        <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg">
           {success}
         </div>
       )}
@@ -371,7 +362,10 @@ const UserManagement: React.FC<UserManagementProps> = ({ user }) => {
                 type="text"
                 placeholder="Search users..."
                 value={filters.search}
-                onChange={(e) => setFilters({ ...filters, search: e.target.value })}
+                onChange={(e) => {
+                  setFilters({ ...filters, search: e.target.value });
+                  setCurrentPage(0); // Reset to first page when search changes
+                }}
                 className="pl-10 pr-4 py-2 w-full border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               />
             </div>
@@ -379,21 +373,28 @@ const UserManagement: React.FC<UserManagementProps> = ({ user }) => {
           
           <select
             value={filters.role}
-            onChange={(e) => setFilters({ ...filters, role: e.target.value })}
+            onChange={(e) => {
+              setFilters({ ...filters, role: e.target.value });
+              setCurrentPage(0); // Reset to first page when filter changes
+            }}
             className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           >
             <option value="">All Roles</option>
             <option value="SUPER_ADMIN">Super Administrator</option>
             <option value="ADMIN">Administrator</option>
-            <option value="AUDITOR">Auditor</option>
             <option value="BRANCH_MANAGER">Branch Manager</option>
-            <option value="SALES_USER">Sales User</option>
             <option value="BRANCH_APPROVER">Branch Approver</option>
+            <option value="AUDITOR">Auditor</option>
+            <option value="SALES_USER">Sales User</option>
+            <option value="USER">User</option>
           </select>
           
           <select
             value={filters.status}
-            onChange={(e) => setFilters({ ...filters, status: e.target.value })}
+            onChange={(e) => {
+              setFilters({ ...filters, status: e.target.value });
+              setCurrentPage(0); // Reset to first page when filter changes
+            }}
             className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           >
             <option value="">All Status</option>
@@ -403,20 +404,23 @@ const UserManagement: React.FC<UserManagementProps> = ({ user }) => {
           
           <select
             value={filters.branch}
-            onChange={(e) => setFilters({ ...filters, branch: e.target.value })}
+            onChange={(e) => {
+              setFilters({ ...filters, branch: e.target.value });
+              setCurrentPage(0); // Reset to first page when filter changes
+            }}
             className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           >
             <option value="">All Branches</option>
             {branches.map(branch => (
               <option key={branch.id} value={branch.id.toString()}>
-                {branch.name} ({branch.branchCode})
+                {branch.name}
               </option>
             ))}
           </select>
         </div>
       </div>
 
-      {/* Users Table */}
+      {/* User Table */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
         {loading ? (
           <div className="p-8 text-center">
@@ -430,111 +434,257 @@ const UserManagement: React.FC<UserManagementProps> = ({ user }) => {
             <p className="text-gray-500">Try adjusting your search or filters.</p>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    User
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Role
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Branch
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Status
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Created
-                  </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {filteredUsers.map((userItem) => (
-                  <tr key={userItem.id} className="hover:bg-gray-50">
-                    <td className="px-6 py-4 whitespace-nowrap">
+          <>
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th 
+                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                      onClick={() => {
+                        if (sortBy === 'name') {
+                          setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
+                        } else {
+                          setSortBy('name');
+                          setSortDir('asc');
+                        }
+                        setCurrentPage(0); // Reset to first page when sorting changes
+                      }}
+                    >
                       <div className="flex items-center">
-                        <div className="flex-shrink-0 h-10 w-10">
-                          <div className="h-10 w-10 rounded-full bg-blue-100 flex items-center justify-center">
-                            <span className="text-sm font-medium text-blue-600">
-                              {userItem.name.charAt(0).toUpperCase()}
-                            </span>
-                          </div>
-                        </div>
-                        <div className="ml-4">
-                          <div className="text-sm font-medium text-gray-900">
-                            {userItem.name}
-                          </div>
-                          <div className="text-sm text-gray-500 flex items-center">
-                            <Mail className="h-4 w-4 mr-1" />
-                            {userItem.email}
-                          </div>
-                        </div>
+                        User
+                        {sortBy === 'name' && (
+                          sortDir === 'asc' ? <ChevronUp className="h-4 w-4 ml-1" /> : <ChevronDown className="h-4 w-4 ml-1" />
+                        )}
                       </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                        {getRoleDisplayName(userItem.role)}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    </th>
+                    <th 
+                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                      onClick={() => {
+                        if (sortBy === 'role') {
+                          setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
+                        } else {
+                          setSortBy('role');
+                          setSortDir('asc');
+                        }
+                        setCurrentPage(0); // Reset to first page when sorting changes
+                      }}
+                    >
                       <div className="flex items-center">
-                        <Building className="h-4 w-4 mr-1" />
-                        {getBranchName(userItem.branchId)}
+                        Role
+                        {sortBy === 'role' && (
+                          sortDir === 'asc' ? <ChevronUp className="h-4 w-4 ml-1" /> : <ChevronDown className="h-4 w-4 ml-1" />
+                        )}
                       </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      {getStatusBadge(userItem.enabled)}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Branch
+                    </th>
+                    <th 
+                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                      onClick={() => {
+                        if (sortBy === 'enabled') {
+                          setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
+                        } else {
+                          setSortBy('enabled');
+                          setSortDir('asc');
+                        }
+                        setCurrentPage(0); // Reset to first page when sorting changes
+                      }}
+                    >
                       <div className="flex items-center">
-                        <Calendar className="h-4 w-4 mr-1" />
-                        {new Date(userItem.createdAt).toLocaleDateString()}
+                        Status
+                        {sortBy === 'enabled' && (
+                          sortDir === 'asc' ? <ChevronUp className="h-4 w-4 ml-1" /> : <ChevronDown className="h-4 w-4 ml-1" />
+                        )}
                       </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2">
-                      <button
-                        onClick={() => openEditModal(userItem)}
-                        className="text-blue-600 hover:text-blue-800"
-                        title="Edit User"
-                      >
-                        <Edit className="h-4 w-4" />
-                      </button>
-                      <button
-                        onClick={() => openPasswordResetModal(userItem)}
-                        className="text-yellow-600 hover:text-yellow-800"
-                        title="Reset Password"
-                      >
-                        <Key className="h-4 w-4" />
-                      </button>
-                      <button
-                        onClick={() => handleToggleUserStatus(userItem.id, userItem.enabled)}
-                        className={userItem.enabled ? 'text-red-600 hover:text-red-800' : 'text-green-600 hover:text-green-800'}
-                        title={userItem.enabled ? 'Disable User' : 'Enable User'}
-                      >
-                        {userItem.enabled ? <UserX className="h-4 w-4" /> : <UserCheck className="h-4 w-4" />}
-                      </button>
-                      <button
-                        onClick={() => handleDeleteUser(userItem.id)}
-                        className="text-red-600 hover:text-red-800"
-                        title="Delete User"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    </td>
+                    </th>
+                    <th 
+                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                      onClick={() => {
+                        if (sortBy === 'createdAt') {
+                          setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
+                        } else {
+                          setSortBy('createdAt');
+                          setSortDir('asc');
+                        }
+                        setCurrentPage(0); // Reset to first page when sorting changes
+                      }}
+                    >
+                      <div className="flex items-center">
+                        Created
+                        {sortBy === 'createdAt' && (
+                          sortDir === 'asc' ? <ChevronUp className="h-4 w-4 ml-1" /> : <ChevronDown className="h-4 w-4 ml-1" />
+                        )}
+                      </div>
+                    </th>
+                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Actions
+                    </th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {filteredUsers.map((userItem) => (
+                    <tr key={userItem.id} className="hover:bg-gray-50">
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="flex items-center">
+                          <div className="flex-shrink-0 h-10 w-10">
+                            <div className="h-10 w-10 rounded-full bg-blue-100 flex items-center justify-center">
+                              <span className="text-sm font-medium text-blue-600">
+                                {userItem.name.charAt(0).toUpperCase()}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="ml-4">
+                            <div className="text-sm font-medium text-gray-900">
+                              {userItem.name}
+                            </div>
+                            <div className="text-sm text-gray-500 flex items-center">
+                              <Mail className="h-4 w-4 mr-1" />
+                              {userItem.email}
+                            </div>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                          {getRoleDisplayName(userItem.role)}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        {userItem.branchName || (userItem.branchId ? getBranchName(userItem.branchId) : 'No Branch')}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                          userItem.enabled 
+                            ? 'bg-green-100 text-green-800' 
+                            : 'bg-red-100 text-red-800'
+                        }`}>
+                          {userItem.enabled ? 'Active' : 'Inactive'}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        <div className="flex items-center">
+                          <Calendar className="h-4 w-4 mr-1" />
+                          {new Date(userItem.createdAt).toLocaleDateString()}
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2">
+                        <button
+                          onClick={() => openEditModal(userItem)}
+                          className="text-blue-600 hover:text-blue-800"
+                          title="Edit User"
+                        >
+                          <Edit className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => openPasswordResetModal(userItem)}
+                          className="text-green-600 hover:text-green-800"
+                          title="Reset Password"
+                        >
+                          <Key className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => handleToggleUserStatus(userItem.id, userItem.enabled)}
+                          className={`${userItem.enabled ? 'text-red-600 hover:text-red-800' : 'text-green-600 hover:text-green-800'}`}
+                          title={userItem.enabled ? 'Disable User' : 'Enable User'}
+                        >
+                          {userItem.enabled ? <UserX className="h-4 w-4" /> : <UserCheck className="h-4 w-4" />}
+                        </button>
+                        <button
+                          onClick={() => handleDeleteUser(userItem.id)}
+                          className="text-red-600 hover:text-red-800"
+                          title="Delete User"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Pagination Controls */}
+            {usersData && (
+              <div className="px-6 py-4 border-t border-gray-200">
+                <div className="flex justify-center">
+                  <Pagination>
+                    <PaginationContent>
+                      <PaginationItem>
+                        <PaginationPrevious
+                          href="#"
+                          onClick={(e) => {
+                            e.preventDefault()
+                            if (usersData.pageInfo.pageNumber > 0) {
+                              setCurrentPage(usersData.pageInfo.pageNumber - 1)
+                            }
+                          }}
+                          className={usersData.pageInfo.pageNumber === 0 ? "pointer-events-none opacity-50" : "cursor-pointer"}
+                        />
+                      </PaginationItem>
+                      {Array.from({ length: usersData.pageInfo.totalPages }).map((_, i) => (
+                        <PaginationItem key={i}>
+                          <PaginationLink
+                            href="#"
+                            isActive={usersData.pageInfo.pageNumber === i}
+                            onClick={(e) => {
+                              e.preventDefault()
+                              setCurrentPage(i)
+                            }}
+                            className="cursor-pointer"
+                          >
+                            {i + 1}
+                          </PaginationLink>
+                        </PaginationItem>
+                      ))}
+                      <PaginationItem>
+                        <PaginationNext
+                          href="#"
+                          onClick={(e) => {
+                            e.preventDefault()
+                            if (usersData.pageInfo.pageNumber < usersData.pageInfo.totalPages - 1) {
+                              setCurrentPage(usersData.pageInfo.pageNumber + 1)
+                            }
+                          }}
+                          className={usersData.pageInfo.pageNumber === usersData.pageInfo.totalPages - 1 ? "pointer-events-none opacity-50" : "cursor-pointer"}
+                        />
+                      </PaginationItem>
+                    </PaginationContent>
+                  </Pagination>
+                </div>
+                
+                {/* Page Size Selector */}
+                <div className="flex justify-center mt-4">
+                  <select
+                    value={pageSize}
+                    onChange={(e) => {
+                      setPageSize(Number(e.target.value))
+                      setCurrentPage(0) // Reset to first page when changing page size
+                    }}
+                    className="px-3 py-1 text-sm border border-gray-300 rounded-md"
+                  >
+                    <option value={10}>10 per page</option>
+                    <option value={25}>25 per page</option>
+                    <option value={50}>50 per page</option>
+                    <option value={100}>100 per page</option>
+                  </select>
+                </div>
+                
+                {/* Results info */}
+                <div className="flex justify-center mt-2">
+                  <span className="text-sm text-gray-700">
+                    Showing {Math.min((usersData.pageInfo.pageNumber * usersData.pageInfo.pageSize) + 1, usersData.pageInfo.totalElements)} to{' '}
+                    {Math.min((usersData.pageInfo.pageNumber + 1) * usersData.pageInfo.pageSize, usersData.pageInfo.totalElements)} of {usersData.pageInfo.totalElements} results
+                  </span>
+                </div>
+              </div>
+            )}
+          </>
         )}
       </div>
 
+      {/* Modals would go here - Create, Edit, Password Reset */}
       {/* Create User Modal */}
       {showCreateModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
@@ -579,17 +729,16 @@ const UserManagement: React.FC<UserManagementProps> = ({ user }) => {
                 <label className="block text-sm font-medium text-gray-700 mb-2">Role</label>
                 <select
                   value={userForm.role}
-                  onChange={(e) => setUserForm({ ...userForm, role: e.target.value as 'SUPER_ADMIN' | 'ADMIN' | 'AUDITOR' | 'BRANCH_MANAGER' | 'SALES_USER' | 'BRANCH_APPROVER' })}
+                  onChange={(e) => setUserForm({ ...userForm, role: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 >
+                  <option value="USER">User</option>
                   <option value="SALES_USER">Sales User</option>
                   <option value="BRANCH_MANAGER">Branch Manager</option>
                   <option value="BRANCH_APPROVER">Branch Approver</option>
                   <option value="AUDITOR">Auditor</option>
                   <option value="ADMIN">Administrator</option>
-                  {user?.role === 'SUPER_ADMIN' && (
-                    <option value="SUPER_ADMIN">Super Administrator</option>
-                  )}
+                  <option value="SUPER_ADMIN">Super Administrator</option>
                 </select>
               </div>
               
@@ -679,17 +828,16 @@ const UserManagement: React.FC<UserManagementProps> = ({ user }) => {
                 <label className="block text-sm font-medium text-gray-700 mb-2">Role</label>
                 <select
                   value={userForm.role}
-                  onChange={(e) => setUserForm({ ...userForm, role: e.target.value as 'SUPER_ADMIN' | 'ADMIN' | 'AUDITOR' | 'BRANCH_MANAGER' | 'SALES_USER' | 'BRANCH_APPROVER' })}
+                  onChange={(e) => setUserForm({ ...userForm, role: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 >
+                  <option value="USER">User</option>
                   <option value="SALES_USER">Sales User</option>
                   <option value="BRANCH_MANAGER">Branch Manager</option>
                   <option value="BRANCH_APPROVER">Branch Approver</option>
                   <option value="AUDITOR">Auditor</option>
                   <option value="ADMIN">Administrator</option>
-                  {(user?.role === 'SUPER_ADMIN' && selectedUser?.role === 'SUPER_ADMIN') && (
-                    <option value="SUPER_ADMIN">Super Administrator</option>
-                  )}
+                  <option value="SUPER_ADMIN">Super Administrator</option>
                 </select>
               </div>
               
@@ -801,6 +949,4 @@ const UserManagement: React.FC<UserManagementProps> = ({ user }) => {
       )}
     </div>
   );
-};
-
-export default UserManagement;
+}
