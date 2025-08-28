@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Building, Plus, Search, Edit, MapPin, Users, 
-  Calendar, UserCheck, BarChart3, AlertCircle, Badge, Mail, Phone
+  Calendar, UserCheck, BarChart3, AlertCircle, Badge, Mail, Phone, Trash2
 } from 'lucide-react';
 import { User } from '../types';
 import { useUser } from '@/contexts/user-context';
@@ -16,6 +16,33 @@ import {
   PaginationNext,
   PaginationPrevious,
 } from "@/components/ui/pagination";
+import { toast } from "@/components/ui/use-toast";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+
+// Utility function for handling API errors
+const handleApiError = (error: any, defaultMessage: string): string => {
+  console.error('API Error:', error);
+  
+  if (error.response?.data?.message) {
+    return error.response.data.message;
+  }
+  if (error.response?.data?.error) {
+    return error.response.data.error;
+  }
+  if (error.message) {
+    return error.message;
+  }
+  return defaultMessage;
+};
 
 interface BranchManagementProps {
   user: User;
@@ -40,9 +67,9 @@ const BranchManagement: React.FC<BranchManagementProps> = ({ user }) => {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [selectedBranch, setSelectedBranch] = useState<BranchResponseDto | null>(null);
   const [filters, setFilters] = useState({ search: '', region: '' });
-  const [error, setError] = useState<string | null>(null);
   
   // Pagination state
   const [currentPage, setCurrentPage] = useState(0);
@@ -72,7 +99,6 @@ const BranchManagement: React.FC<BranchManagementProps> = ({ user }) => {
   
   const loadBranches = async () => {
     setLoading(true);
-    setError(null);
     try {
       let response;
       
@@ -105,7 +131,12 @@ const BranchManagement: React.FC<BranchManagementProps> = ({ user }) => {
       });
     } catch (error: any) {
       console.error('Failed to load branches:', error);
-      setError(error.message || 'Failed to load branches');
+      const errorMessage = handleApiError(error, 'Failed to load branches');
+      toast({
+        title: "Error",
+        description: errorMessage,
+        variant: "destructive",
+      });
     } finally {
       setLoading(false);
     }
@@ -114,16 +145,24 @@ const BranchManagement: React.FC<BranchManagementProps> = ({ user }) => {
   const handleCreateBranch = async (e: React.FormEvent) => {
     e.preventDefault();
     setCreating(true);
-    setError(null);
     
     try {
       await branchApiService.createBranch(branchForm);
       setShowCreateModal(false);
       resetForm();
       loadBranches();
+      toast({
+        title: "Success",
+        description: 'Branch created successfully',
+      });
     } catch (error: any) {
       console.error('Failed to create branch:', error);
-      setError(error.message || 'Failed to create branch');
+      const errorMessage = handleApiError(error, 'Failed to create branch');
+      toast({
+        title: "Error",
+        description: errorMessage,
+        variant: "destructive",
+      });
     } finally {
       setCreating(false);
     }
@@ -134,7 +173,6 @@ const BranchManagement: React.FC<BranchManagementProps> = ({ user }) => {
     if (!selectedBranch) return;
     
     setUpdating(true);
-    setError(null);
     try {
       const updateData: BranchUpdateDto = {
         ...branchForm,
@@ -146,11 +184,43 @@ const BranchManagement: React.FC<BranchManagementProps> = ({ user }) => {
       setSelectedBranch(null);
       resetForm();
       loadBranches();
+      toast({
+        title: "Success",
+        description: 'Branch updated successfully',
+      });
     } catch (error: any) {
       console.error('Failed to update branch:', error);
-      setError(error.message || 'Failed to update branch');
+      const errorMessage = handleApiError(error, 'Failed to update branch');
+      toast({
+        title: "Error",
+        description: errorMessage,
+        variant: "destructive",
+      });
     } finally {
       setUpdating(false);
+    }
+  };
+
+  const handleDeleteBranch = async () => {
+    if (!selectedBranch) return;
+    
+    try {
+      await branchApiService.deleteBranch(selectedBranch.id);
+      setShowDeleteModal(false);
+      setSelectedBranch(null);
+      loadBranches();
+      toast({
+        title: "Success",
+        description: 'Branch deleted successfully',
+      });
+    } catch (error: any) {
+      console.error('Failed to delete branch:', error);
+      const errorMessage = handleApiError(error, 'Failed to delete branch');
+      toast({
+        title: "Error",
+        description: errorMessage,
+        variant: "destructive",
+      });
     }
   };
 
@@ -163,7 +233,6 @@ const BranchManagement: React.FC<BranchManagementProps> = ({ user }) => {
       state: '',
       country: ''
     });
-    setError(null);
   };
 
   const openEditModal = (branch: BranchResponseDto) => {
@@ -182,6 +251,11 @@ const BranchManagement: React.FC<BranchManagementProps> = ({ user }) => {
   const openDetailsModal = (branch: BranchResponseDto) => {
     setSelectedBranch(branch);
     setShowDetailsModal(true);
+  };
+
+  const openDeleteModal = (branch: BranchResponseDto) => {
+    setSelectedBranch(branch);
+    setShowDeleteModal(true);
   };
 
   const getManagerName = (branch: BranchResponseDto) => {
@@ -319,23 +393,6 @@ const BranchManagement: React.FC<BranchManagementProps> = ({ user }) => {
         </div>
       </div>
 
-      {/* Error Alert */}
-      {error && (
-        <div className="bg-red-50 border border-red-200 rounded-lg p-4 flex items-center space-x-3">
-          <AlertCircle className="h-5 w-5 text-red-600" />
-          <div>
-            <p className="text-sm font-medium text-red-800">Error</p>
-            <p className="text-sm text-red-700">{error}</p>
-          </div>
-          <button
-            onClick={() => setError(null)}
-            className="ml-auto text-red-600 hover:text-red-800"
-          >
-            ×
-          </button>
-        </div>
-      )}
-
       {/* Filters */}
       <div className="bg-white p-4 rounded-lg border border-gray-200">
         <div className="flex items-center justify-between mb-4">
@@ -453,15 +510,28 @@ const BranchManagement: React.FC<BranchManagementProps> = ({ user }) => {
                     <p className="text-sm text-gray-500">{branch.branchCode}</p>
                   </div>
                 </div>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation(); // Prevent card click when editing
-                    openEditModal(branch);
-                  }}
-                  className="p-1 rounded-lg hover:bg-gray-100"
-                >
-                  <Edit className="h-4 w-4 text-gray-400" />
-                </button>
+                <div className="flex space-x-1">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation(); // Prevent card click when editing
+                      openEditModal(branch);
+                    }}
+                    className="p-1 rounded-lg hover:bg-gray-100"
+                    title="Edit Branch"
+                  >
+                    <Edit className="h-4 w-4 text-gray-400" />
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation(); // Prevent card click when deleting
+                      openDeleteModal(branch);
+                    }}
+                    className="p-1 rounded-lg hover:bg-red-100"
+                    title="Delete Branch"
+                  >
+                    <Trash2 className="h-4 w-4 text-red-400 hover:text-red-600" />
+                  </button>
+                </div>
               </div>
               
               <div className="space-y-3">
@@ -560,13 +630,6 @@ const BranchManagement: React.FC<BranchManagementProps> = ({ user }) => {
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
             <h2 className="text-xl font-bold text-gray-900 mb-4">Create New Branch</h2>
-            
-            {error && (
-              <div className="mb-4 bg-red-50 border border-red-200 rounded-lg p-3 flex items-center space-x-2">
-                <AlertCircle className="h-4 w-4 text-red-600" />
-                <span className="text-sm text-red-700">{error}</span>
-              </div>
-            )}
             
             <form onSubmit={handleCreateBranch} className="space-y-4">
               <div>
@@ -701,13 +764,6 @@ const BranchManagement: React.FC<BranchManagementProps> = ({ user }) => {
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
             <h2 className="text-xl font-bold text-gray-900 mb-4">Edit Branch</h2>
-            
-            {error && (
-              <div className="mb-4 bg-red-50 border border-red-200 rounded-lg p-3 flex items-center space-x-2">
-                <AlertCircle className="h-4 w-4 text-red-600" />
-                <span className="text-sm text-red-700">{error}</span>
-              </div>
-            )}
             
             <form onSubmit={handleUpdateBranch} className="space-y-4">
               <div>
@@ -1082,6 +1138,16 @@ const BranchManagement: React.FC<BranchManagementProps> = ({ user }) => {
               <button
                 onClick={() => {
                   setShowDetailsModal(false);
+                  openDeleteModal(selectedBranch);
+                }}
+                className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 flex items-center justify-center"
+              >
+                <Trash2 className="h-4 w-4 mr-2" />
+                Delete Branch
+              </button>
+              <button
+                onClick={() => {
+                  setShowDetailsModal(false);
                   setSelectedBranch(null);
                 }}
                 className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
@@ -1092,6 +1158,32 @@ const BranchManagement: React.FC<BranchManagementProps> = ({ user }) => {
           </div>
         </div>
       )}
+
+      {/* Delete Branch Confirmation Dialog */}
+      <AlertDialog open={showDeleteModal} onOpenChange={setShowDeleteModal}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Branch</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete "{selectedBranch?.name}"? This action cannot be undone.
+              {selectedBranch && getBranchUserCount(selectedBranch) > 0 && (
+                <span className="block mt-2 text-red-600 font-medium">
+                  Warning: This branch has {getBranchUserCount(selectedBranch)} user(s) associated with it.
+                </span>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction 
+              onClick={handleDeleteBranch}
+              className="bg-red-600 hover:bg-red-700"
+            >
+              Delete Branch
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };

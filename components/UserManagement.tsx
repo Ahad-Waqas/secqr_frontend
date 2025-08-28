@@ -16,6 +16,34 @@ import {
   PaginationNext,
   PaginationPrevious,
 } from "@/components/ui/pagination";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import { toast } from "@/components/ui/use-toast";
+
+// Utility function for handling API errors
+const handleApiError = (error: any, defaultMessage: string): string => {
+  console.error('API Error:', error);
+  
+  if (error.response?.data?.message) {
+    return error.response.data.message;
+  }
+  if (error.response?.data?.error) {
+    return error.response.data.error;
+  }
+  if (error.message) {
+    return error.message;
+  }
+  return defaultMessage;
+};
 
 // Backend User interface
 interface BackendUser {
@@ -50,8 +78,6 @@ export default function UserManagement() {
   const [usersData, setUsersData] = useState<PaginatedUserResponse | null>(null);
   const [branches, setBranches] = useState<BranchResponseDto[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
 
   // Pagination state
   const [currentPage, setCurrentPage] = useState(0);
@@ -69,6 +95,10 @@ export default function UserManagement() {
   const [showPasswordResetModal, setShowPasswordResetModal] = useState(false);
   const [selectedUser, setSelectedUser] = useState<BackendUser | null>(null);
   
+  // Delete confirmation states
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [userToDelete, setUserToDelete] = useState<BackendUser | null>(null);
+  
   const [userForm, setUserForm] = useState({
     name: '',
     email: '',
@@ -82,12 +112,6 @@ export default function UserManagement() {
     newPassword: '',
     confirmPassword: ''
   });
-
-  // Clear alerts
-  const clearAlerts = () => {
-    setError('');
-    setSuccess('');
-  };
 
   // Fetch users from backend with pagination
   const fetchUsers = async () => {
@@ -121,7 +145,12 @@ export default function UserManagement() {
       }
     } catch (error: any) {
       console.error('Error fetching users:', error);
-      setError('Failed to load users: ' + (error.response?.data?.message || error.message));
+      const errorMessage = handleApiError(error, 'Failed to load users');
+      toast({
+        title: "Error",
+        description: errorMessage,
+        variant: "destructive",
+      });
       setUsersData(null);
     } finally {
       setLoading(false);
@@ -135,7 +164,12 @@ export default function UserManagement() {
       setBranches(branchesData);
     } catch (error: any) {
       console.error('Error fetching branches:', error);
-      setError('Failed to load branches');
+      const errorMessage = handleApiError(error, 'Failed to load branches');
+      toast({
+        title: "Error",
+        description: errorMessage,
+        variant: "destructive",
+      });
     }
   };
 
@@ -186,7 +220,6 @@ export default function UserManagement() {
   // Create user
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
-    clearAlerts();
     
     try {
       const response = await api.post('/users', {
@@ -198,13 +231,21 @@ export default function UserManagement() {
       });
       
       if (response.status === 201) {
-        setSuccess('User created successfully');
+        toast({
+          title: "Success",
+          description: 'User created successfully',
+        });
         setShowCreateModal(false);
         resetForm();
         fetchUsers();
       }
     } catch (error: any) {
-      setError(error.response?.data?.message || 'Failed to create user');
+      const errorMessage = handleApiError(error, 'Failed to create user');
+      toast({
+        title: "Error",
+        description: errorMessage,
+        variant: "destructive",
+      });
     }
   };
 
@@ -228,29 +269,56 @@ export default function UserManagement() {
       const response = await api.put(`/users/${selectedUser.id}`, updateData);
       
       if (response.status === 200) {
-        setSuccess('User updated successfully');
+        toast({
+          title: "Success",
+          description: 'User updated successfully',
+        });
         setShowEditModal(false);
         setSelectedUser(null);
         resetForm();
         fetchUsers();
       }
     } catch (error: any) {
-      setError(error.response?.data?.message || 'Failed to update user');
+      const errorMessage = handleApiError(error, 'Failed to update user');
+      toast({
+        title: "Error",
+        description: errorMessage,
+        variant: "destructive",
+      });
     }
   };
 
-  // Delete user
-  const handleDeleteUser = async (userId: number) => {
-    if (!confirm('Are you sure you want to delete this user?')) return;
+  // Open delete confirmation dialog
+  const openDeleteDialog = (user: BackendUser) => {
+    setUserToDelete(user);
+    setShowDeleteDialog(true);
+  };
+
+  // Permanently delete user
+  const handleDeleteUser = async () => {
+    if (!userToDelete) return;
+    
+    const { id: userId } = userToDelete;
     
     try {
-      const response = await api.delete(`/users/${userId}`);
+      const response = await api.delete(`/users/${userId}/permanent`);
       if (response.status === 200) {
-        setSuccess('User deleted successfully');
+        toast({
+          title: "Success",
+          description: 'User permanently deleted successfully',
+        });
         fetchUsers();
       }
     } catch (error: any) {
-      setError(error.response?.data?.message || 'Failed to delete user');
+      const errorMessage = handleApiError(error, 'Failed to permanently delete user');
+      toast({
+        title: "Error",
+        description: errorMessage,
+        variant: "destructive",
+      });
+    } finally {
+      setShowDeleteDialog(false);
+      setUserToDelete(null);
     }
   };
 
@@ -261,11 +329,19 @@ export default function UserManagement() {
       const response = await api.put(endpoint);
       
       if (response.status === 200) {
-        setSuccess(`User ${currentStatus ? 'disabled' : 'enabled'} successfully`);
+        toast({
+          title: "Success",
+          description: `User ${currentStatus ? 'disabled' : 'enabled'} successfully`,
+        });
         fetchUsers();
       }
     } catch (error: any) {
-      setError(error.response?.data?.message || 'Failed to update user status');
+      const errorMessage = handleApiError(error, 'Failed to update user status');
+      toast({
+        title: "Error",
+        description: errorMessage,
+        variant: "destructive",
+      });
     }
   };
 
@@ -299,7 +375,11 @@ export default function UserManagement() {
     if (!selectedUser) return;
     
     if (passwordResetForm.newPassword !== passwordResetForm.confirmPassword) {
-      setError('Passwords do not match');
+      toast({
+        title: "Error",
+        description: 'Passwords do not match',
+        variant: "destructive",
+      });
       return;
     }
     
@@ -309,13 +389,21 @@ export default function UserManagement() {
       });
       
       if (response.status === 200) {
-        setSuccess('Password reset successfully');
+        toast({
+          title: "Success",
+          description: 'Password reset successfully',
+        });
         setShowPasswordResetModal(false);
         setSelectedUser(null);
         resetForm();
       }
     } catch (error: any) {
-      setError(error.response?.data?.message || 'Failed to reset password');
+      const errorMessage = handleApiError(error, 'Failed to reset password');
+      toast({
+        title: "Error",
+        description: errorMessage,
+        variant: "destructive",
+      });
     }
   };
 
@@ -328,7 +416,6 @@ export default function UserManagement() {
         </div>
         <button
           onClick={() => {
-            clearAlerts();
             setShowCreateModal(true);
           }}
           className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 flex items-center gap-2"
@@ -337,20 +424,6 @@ export default function UserManagement() {
           Add User
         </button>
       </div>
-
-      {/* Alerts */}
-      {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg flex items-center">
-          <AlertCircle className="h-5 w-5 mr-2" />
-          {error}
-        </div>
-      )}
-      
-      {success && (
-        <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg">
-          {success}
-        </div>
-      )}
 
       {/* Filters */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 mb-6">
@@ -592,9 +665,9 @@ export default function UserManagement() {
                           {userItem.enabled ? <UserX className="h-4 w-4" /> : <UserCheck className="h-4 w-4" />}
                         </button>
                         <button
-                          onClick={() => handleDeleteUser(userItem.id)}
+                          onClick={() => openDeleteDialog(userItem)}
                           className="text-red-600 hover:text-red-800"
-                          title="Delete User"
+                          title="⚠️ Permanently Delete User"
                         >
                           <Trash2 className="h-4 w-4" />
                         </button>
@@ -947,6 +1020,34 @@ export default function UserManagement() {
           </div>
         </div>
       )}
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              ⚠️ Permanently Delete User
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              <span className="text-red-600 font-semibold">WARNING: This action cannot be undone!</span>
+              <br /><br />
+              This will permanently delete <strong>{userToDelete?.name}</strong> ({userToDelete?.email}) 
+              and all associated data from the system. This action is irreversible.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setUserToDelete(null)}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDeleteUser}
+              className="bg-red-600 hover:bg-red-700"
+            >
+              Permanently Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
