@@ -59,6 +59,124 @@ export interface Merchant {
   createdAt: string;
 }
 
+// Backend Request interfaces
+export interface Request {
+  id: number;
+  requestCode: string;
+  title: string;
+  description?: string;
+  type: RequestType;
+  status: RequestStatus;
+  priority: RequestPriority;
+  requestedAmount?: number;
+  approvedAmount?: number;
+  requestDate: string;
+  approvalDate?: string;
+  rejectionDate?: string;
+  rejectionReason?: string;
+  approvalComments?: string;
+  dueDate?: string;
+  attachmentPath?: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+  // Related entities
+  requester?: {
+    id: number;
+    name: string;
+    email: string;
+    role: string;
+    branchId?: number;
+    branchName?: string;
+  };
+  approver?: {
+    id: number;
+    name: string;
+    email: string;
+    role: string;
+    branchId?: number;
+    branchName?: string;
+  };
+  branchId: number;
+  branchName?: string;
+  branchCode?: string;
+  // Computed fields
+  isOverdue: boolean;
+  canBeApproved: boolean;
+  canBeRejected: boolean;
+  daysSinceRequest: number;
+  statusDisplayName: string;
+  typeDisplayName: string;
+  priorityDisplayName: string;
+}
+
+export type RequestType = 
+  | 'QR_CODE_REQUEST'
+  | 'INVENTORY_REQUEST' 
+  | 'PAYMENT_REQUEST'
+  | 'MAINTENANCE_REQUEST'
+  | 'EQUIPMENT_REQUEST'
+  | 'MERCHANT_ONBOARDING'
+  | 'BUDGET_REQUEST'
+  | 'OTHER';
+
+export type RequestStatus = 
+  | 'PENDING'
+  | 'APPROVED'
+  | 'REJECTED'
+  | 'IN_PROGRESS'
+  | 'COMPLETED'
+  | 'CANCELLED';
+
+export type RequestPriority = 
+  | 'LOW'
+  | 'MEDIUM'
+  | 'HIGH'
+  | 'URGENT';
+
+export interface CreateRequestDto {
+  title: string;
+  description?: string;
+  type: RequestType;
+  priority?: RequestPriority;
+  requestedAmount?: number;
+  dueDate?: string;
+  attachmentPath?: string;
+}
+
+export interface UpdateRequestDto {
+  title?: string;
+  description?: string;
+  type?: RequestType;
+  priority?: RequestPriority;
+  requestedAmount?: number;
+  dueDate?: string;
+  attachmentPath?: string;
+}
+
+export interface RequestApprovalDto {
+  action: 'APPROVE' | 'REJECT' | 'RETURN';
+  comments?: string;
+  approvedAmount?: number;
+  rejectionReason?: string;
+}
+
+export interface PaginatedRequestResponse {
+  content: Request[];
+  pageInfo: {
+    pageNumber: number;
+    pageSize: number;
+    totalElements: number;
+    totalPages: number;
+    first: boolean;
+    last: boolean;
+    hasNext: boolean;
+    hasPrevious: boolean;
+  };
+}
+
+// Keep the old interface for backward compatibility, but mark as deprecated
+/** @deprecated Use Request interface instead */
 export interface AllocationRequest {
   id: string;
   requestNumber: string;

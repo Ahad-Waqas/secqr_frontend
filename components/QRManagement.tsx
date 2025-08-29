@@ -47,7 +47,7 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
 
   const [branches, setBranches] = useState<any[]>([]);
 
-  const canManageQRs = user.role === 'system_admin';
+  const canManageQRs = user.role === 'SUPER_ADMIN';
 
   useEffect(() => {
     if (canManageQRs) {
