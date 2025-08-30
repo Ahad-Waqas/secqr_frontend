@@ -38,6 +38,7 @@ export interface QRCode {
   merchantName?: string;
   merchantId?: string;
   terminalId?: string;
+  notes?: string;
   blockedReason?: string;
   blockedAt?: string;
   blockedBy?: string;

@@ -5,7 +5,35 @@ import {
   Building, Store, Hash, Terminal, FileText
 } from 'lucide-react';
 import { User, QRCode } from '../types';
-import { apiService } from '../services/api';
+import { qrCodeApiService, QRCodeCreateDto, QRCodeUpdateDto, QRCodeStatsDto } from '../services/qr-api';
+import { branchApiService, BranchResponseDto } from '../services/branch-api';
+import { toast } from "@/components/ui/use-toast";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+
+// Utility function for handling API errors
+const handleApiError = (error: any, defaultMessage: string): string => {
+  console.error('API Error:', error);
+  
+  if (error.response?.data?.message) {
+    return error.response.data.message;
+  }
+  if (error.response?.data?.error) {
+    return error.response.data.error;
+  }
+  if (error.message) {
+    return error.message;
+  }
+  return defaultMessage;
+};
 
 interface QRManagementProps {
   user: User;
@@ -13,23 +41,33 @@ interface QRManagementProps {
 
 const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
   const [qrCodes, setQrCodes] = useState<QRCode[]>([]);
+  const [stats, setStats] = useState<QRCodeStatsDto | null>(null);
   const [loading, setLoading] = useState(true);
   const [showGenerateModal, setShowGenerateModal] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
+  const [showAssignModal, setShowAssignModal] = useState(false);
+  const [showQRDetailsDialog, setShowQRDetailsDialog] = useState(false);
   const [selectedQR, setSelectedQR] = useState<QRCode | null>(null);
   const [filters, setFilters] = useState({ search: '', status: '', type: '' });
+  
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(0);
+  const [pageSize, setPageSize] = useState(20);
+  const [totalPages, setTotalPages] = useState(0);
+  const [totalElements, setTotalElements] = useState(0);
   
   // Generate form state
   const [generateForm, setGenerateForm] = useState({
     count: 10,
-    type: 'static' as 'static' | 'dynamic',
+    type: 'STATIC' as 'STATIC' | 'DYNAMIC',
     branchId: '',
     autoAssign: false,
     bankName: 'Demo Bank Ltd.',
     merchantName: '',
     merchantId: '',
-    terminalId: ''
+    terminalId: '',
+    notes: ''
   });
   const [generating, setGenerating] = useState(false);
   
@@ -41,11 +79,26 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
   const [editForm, setEditForm] = useState({
     merchantId: '',
     terminalId: '',
-    notes: ''
+    notes: '',
+    merchantName: '',
+    bankName: '',
+    branchId: '',
+    kycVerified: false
   });
   const [updating, setUpdating] = useState(false);
 
-  const [branches, setBranches] = useState<any[]>([]);
+  // Assign form state
+  const [assignForm, setAssignForm] = useState({
+    branchId: '',
+    merchantId: '',
+    terminalId: '',
+    notes: '',
+    merchantName: '',
+    bankName: '',
+  });
+  const [assigning, setAssigning] = useState(false);
+
+  const [branches, setBranches] = useState<BranchResponseDto[]>([]);
 
   const canManageQRs = user.role === 'SUPER_ADMIN';
 
@@ -53,16 +106,51 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
     if (canManageQRs) {
       loadQRCodes();
       loadBranches();
+      loadStats();
     }
-  }, [canManageQRs]);
+  }, [canManageQRs, currentPage, pageSize, filters]);
+
+  // Debounced search effect
+  useEffect(() => {
+    const timeoutId = setTimeout(() => {
+      if (canManageQRs) {
+        loadQRCodes();
+      }
+    }, 500);
+
+    return () => clearTimeout(timeoutId);
+  }, [filters.search]);
 
   const loadQRCodes = async () => {
     setLoading(true);
     try {
-      const data = await apiService.getQRCodes();
-      setQrCodes(data);
+      let result;
+      
+      if (filters.search || filters.status || filters.type) {
+        // Use search API when filters are applied
+        result = await qrCodeApiService.searchQRCodes(
+          filters.search || undefined,
+          filters.status || undefined,
+          filters.type ? filters.type.toUpperCase() : undefined,
+          currentPage,
+          pageSize
+        );
+      } else {
+        // Use regular get all API
+        result = await qrCodeApiService.getAllQRCodes(currentPage, pageSize);
+      }
+      
+      setQrCodes(result.qrCodes);
+      setTotalPages(result.pagination.totalPages);
+      setTotalElements(result.pagination.totalElements);
     } catch (error) {
       console.error('Failed to load QR codes:', error);
+      const errorMessage = handleApiError(error, 'Failed to load QR codes');
+      toast({
+        title: "Error",
+        description: errorMessage,
+        variant: "destructive",
+      });
     } finally {
       setLoading(false);
     }
@@ -70,10 +158,25 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
 
   const loadBranches = async () => {
     try {
-      const data = await apiService.getBranches();
+      const data = await branchApiService.getBranches();
       setBranches(data);
     } catch (error) {
       console.error('Failed to load branches:', error);
+      const errorMessage = handleApiError(error, 'Failed to load branches');
+      toast({
+        title: "Error",
+        description: errorMessage,
+        variant: "destructive",
+      });
+    }
+  };
+
+  const loadStats = async () => {
+    try {
+      const statsData = await qrCodeApiService.getQRCodeStats();
+      setStats(statsData);
+    } catch (error) {
+      console.error('Failed to load QR stats:', error);
     }
   };
   const handleGenerateQRs = async (e: React.FormEvent) => {
@@ -81,25 +184,36 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
     setGenerating(true);
     
     try {
-      const newQRs = await apiService.generateQRCodes(generateForm.count, generateForm.type, {
+      const createData: QRCodeCreateDto = {
+        count: generateForm.count,
+        type: generateForm.type,
         bankName: generateForm.bankName,
         merchantName: generateForm.merchantName,
         merchantId: generateForm.merchantId,
-        terminalId: generateForm.terminalId || undefined
-      });
-      
-      // Auto-assign to branch if specified
-      if (generateForm.autoAssign && generateForm.branchId) {
-        const qrIds = newQRs.map(qr => qr.id);
-        await apiService.allocateQRsToBranch(qrIds, generateForm.branchId);
-      }
+        terminalId: generateForm.terminalId || undefined,
+        branchId: generateForm.autoAssign && generateForm.branchId ? Number(generateForm.branchId) : undefined,
+        autoAssign: generateForm.autoAssign,
+        notes: generateForm.notes || undefined
+      };
+
+      const newQRs = await qrCodeApiService.generateQRCodes(createData);
       
       setShowGenerateModal(false);
       resetGenerateForm();
       loadQRCodes();
+      loadStats();
+      toast({
+        title: "Success",
+        description: `Successfully generated ${newQRs.length} QR codes`,
+      });
     } catch (error) {
       console.error('Failed to generate QR codes:', error);
-      alert(error instanceof Error ? error.message : 'Failed to generate QR codes');
+      const errorMessage = handleApiError(error, 'Failed to generate QR codes');
+      toast({
+        title: "Error",
+        description: errorMessage,
+        variant: "destructive",
+      });
     } finally {
       setGenerating(false);
     }
@@ -111,12 +225,23 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
     
     setUploading(true);
     try {
-      await apiService.uploadQRCodes(uploadFile);
+      const uploadedQRs = await qrCodeApiService.uploadQRCodes(uploadFile);
       setShowUploadModal(false);
       setUploadFile(null);
       loadQRCodes();
+      loadStats();
+      toast({
+        title: "Success",
+        description: `Successfully uploaded ${uploadedQRs.length} QR codes`,
+      });
     } catch (error) {
       console.error('Failed to upload QR codes:', error);
+      const errorMessage = handleApiError(error, 'Failed to upload QR codes');
+      toast({
+        title: "Error",
+        description: errorMessage,
+        variant: "destructive",
+      });
     } finally {
       setUploading(false);
     }
@@ -128,13 +253,39 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
     
     setUpdating(true);
     try {
-      await apiService.updateQRCode(selectedQR.id, editForm);
+      // If branch is changed, allocate QR to new branch
+      if (editForm.branchId && editForm.branchId !== selectedQR.allocatedBranchId?.toString()) {
+        await qrCodeApiService.allocateQRsToBranch([selectedQR.id], Number(editForm.branchId));
+      }
+      
+      // Update other QR details
+      const updateData: QRCodeUpdateDto = {
+        merchantId: editForm.merchantId || undefined,
+        terminalId: editForm.terminalId || undefined,
+        notes: editForm.notes || undefined,
+        merchantName: editForm.merchantName || undefined,
+        bankName: editForm.bankName || undefined,
+        kycVerified: editForm.kycVerified
+      };
+
+      await qrCodeApiService.updateQRCode(selectedQR.id, updateData);
       setShowEditModal(false);
       setSelectedQR(null);
       resetEditForm();
       loadQRCodes();
+      loadStats();
+      toast({
+        title: "Success",
+        description: "QR code updated successfully",
+      });
     } catch (error) {
       console.error('Failed to update QR code:', error);
+      const errorMessage = handleApiError(error, 'Failed to update QR code');
+      toast({
+        title: "Error",
+        description: errorMessage,
+        variant: "destructive",
+      });
     } finally {
       setUpdating(false);
     }
@@ -309,23 +460,130 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
     if (!reason) return;
     
     try {
-      await apiService.blockQRCode(qrId, reason);
+      await qrCodeApiService.blockQRCode(qrId, reason);
       loadQRCodes();
+      loadStats();
+      toast({
+        title: "Success",
+        description: "QR code blocked successfully",
+      });
     } catch (error) {
       console.error('Failed to block QR code:', error);
+      const errorMessage = handleApiError(error, 'Failed to block QR code');
+      toast({
+        title: "Error",
+        description: errorMessage,
+        variant: "destructive",
+      });
     }
+  };
+
+  const handleUnblockQR = async (qrId: string) => {
+    // Ask for an optional reason for audit purposes
+    const reason = prompt('Please provide a reason for unblocking this QR code (optional):');
+    try {
+      await qrCodeApiService.unblockQRCode(qrId, reason || undefined);
+      loadQRCodes();
+      loadStats();
+      toast({
+        title: "Success",
+        description: "QR code unblocked successfully",
+      });
+    } catch (error) {
+      console.error('Failed to unblock QR code:', error);
+      const errorMessage = handleApiError(error, 'Failed to unblock QR code');
+      toast({
+        title: "Error",
+        description: errorMessage,
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleAssignQR = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedQR) return;
+    
+    setAssigning(true);
+    try {
+      // Use the allocate API to assign QR to branch - fix parameter order
+      await qrCodeApiService.allocateQRsToBranch([selectedQR.id], Number(assignForm.branchId));
+      
+      // If merchant details are provided, also update the QR
+      if (assignForm.merchantId || assignForm.merchantName || assignForm.terminalId || assignForm.notes || assignForm.bankName) {
+        const updateData: QRCodeUpdateDto = {
+          merchantId: assignForm.merchantId || undefined,
+          terminalId: assignForm.terminalId || undefined,
+          notes: assignForm.notes || undefined,
+          merchantName: assignForm.merchantName || undefined,
+          bankName: assignForm.bankName || undefined,
+          kycVerified: false
+        };
+        await qrCodeApiService.updateQRCode(selectedQR.id, updateData);
+      }
+      
+      setShowAssignModal(false);
+      setSelectedQR(null);
+      resetAssignForm();
+      loadQRCodes();
+      loadStats();
+      toast({
+        title: "Success",
+        description: "QR code assigned successfully",
+      });
+    } catch (error) {
+      console.error('Failed to assign QR code:', error);
+      const errorMessage = handleApiError(error, 'Failed to assign QR code');
+      toast({
+        title: "Error",
+        description: errorMessage,
+        variant: "destructive",
+      });
+    } finally {
+      setAssigning(false);
+    }
+  };
+
+  const showQRDetails = (qr: QRCode) => {
+    setSelectedQR(qr);
+    setShowQRDetailsDialog(true);
+  };
+
+  const resetAssignForm = () => {
+    setAssignForm({
+      branchId: '',
+      merchantId: '',
+      terminalId: '',
+      notes: '',
+      merchantName: '',
+      bankName: '',
+    });
+  };
+
+  const openAssignModal = (qr: QRCode) => {
+    setSelectedQR(qr);
+    setAssignForm({
+      branchId: '',
+      merchantId: qr.merchantId || '',
+      terminalId: qr.terminalId || '',
+      notes: qr.notes || '',
+      merchantName: qr.merchantName || '',
+      bankName: qr.bankName || '',
+    });
+    setShowAssignModal(true);
   };
 
   const resetGenerateForm = () => {
     setGenerateForm({
       count: 10,
-      type: 'static',
+      type: 'STATIC',
       branchId: '',
       autoAssign: false,
       bankName: 'Demo Bank Ltd.',
       merchantName: '',
       merchantId: '',
-      terminalId: ''
+      terminalId: '',
+      notes: ''
     });
   };
 
@@ -333,7 +591,11 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
     setEditForm({
       merchantId: '',
       terminalId: '',
-      notes: ''
+      notes: '',
+      merchantName: '',
+      bankName: '',
+      branchId: '',
+      kycVerified: false
     });
   };
 
@@ -342,9 +604,19 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
     setEditForm({
       merchantId: qr.merchantId || '',
       terminalId: qr.terminalId || '',
-      notes: qr.notes || ''
+      notes: qr.notes || '',
+      merchantName: qr.merchantName || '',
+      bankName: qr.bankName || '',
+      branchId: qr.allocatedBranchId?.toString() || '',
+      kycVerified: false // Will be updated based on backend data
     });
     setShowEditModal(true);
+  };
+
+  // Helper function to handle filter changes
+  const handleFilterChange = (filterType: string, value: string) => {
+    setFilters({ ...filters, [filterType]: value });
+    setCurrentPage(0); // Reset to first page when filter changes
   };
 
   const getStatusBadge = (status: string) => {
@@ -373,18 +645,6 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
       </span>
     );
   };
-
-  const filteredQRs = qrCodes.filter(qr => {
-    const matchesSearch = !filters.search || 
-      qr.qrValue.toLowerCase().includes(filters.search.toLowerCase()) ||
-      qr.bankName?.toLowerCase().includes(filters.search.toLowerCase()) ||
-      qr.merchantName?.toLowerCase().includes(filters.search.toLowerCase());
-    
-    const matchesStatus = !filters.status || qr.status === filters.status;
-    const matchesType = !filters.type || qr.qrType === filters.type;
-    
-    return matchesSearch && matchesStatus && matchesType;
-  });
 
   if (!canManageQRs) {
     return (
@@ -428,7 +688,7 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
           <div className="flex items-center space-x-3">
             <QrCode className="h-8 w-8 text-blue-600 bg-blue-100 rounded-lg p-2" />
             <div>
-              <p className="text-2xl font-bold text-gray-900">{qrCodes.length}</p>
+              <p className="text-2xl font-bold text-gray-900">{stats?.totalQRs || 0}</p>
               <p className="text-sm text-gray-600">Total QRs</p>
             </div>
           </div>
@@ -438,9 +698,7 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
           <div className="flex items-center space-x-3">
             <Building className="h-8 w-8 text-gray-600 bg-gray-100 rounded-lg p-2" />
             <div>
-              <p className="text-2xl font-bold text-gray-900">
-                {qrCodes.filter(qr => qr.status === 'unallocated').length}
-              </p>
+              <p className="text-2xl font-bold text-gray-900">{stats?.unallocatedQRs || 0}</p>
               <p className="text-sm text-gray-600">Unallocated</p>
             </div>
           </div>
@@ -450,9 +708,7 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
           <div className="flex items-center space-x-3">
             <Building className="h-8 w-8 text-blue-600 bg-blue-100 rounded-lg p-2" />
             <div>
-              <p className="text-2xl font-bold text-gray-900">
-                {qrCodes.filter(qr => qr.status === 'allocated').length}
-              </p>
+              <p className="text-2xl font-bold text-gray-900">{stats?.allocatedQRs || 0}</p>
               <p className="text-sm text-gray-600">Allocated</p>
             </div>
           </div>
@@ -462,9 +718,7 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
           <div className="flex items-center space-x-3">
             <CheckCircle className="h-8 w-8 text-emerald-600 bg-emerald-100 rounded-lg p-2" />
             <div>
-              <p className="text-2xl font-bold text-gray-900">
-                {qrCodes.filter(qr => qr.status === 'issued').length}
-              </p>
+              <p className="text-2xl font-bold text-gray-900">{stats?.issuedQRs || 0}</p>
               <p className="text-sm text-gray-600">Issued</p>
             </div>
           </div>
@@ -474,9 +728,7 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
           <div className="flex items-center space-x-3">
             <AlertTriangle className="h-8 w-8 text-red-600 bg-red-100 rounded-lg p-2" />
             <div>
-              <p className="text-2xl font-bold text-gray-900">
-                {qrCodes.filter(qr => qr.status === 'blocked').length}
-              </p>
+              <p className="text-2xl font-bold text-gray-900">{stats?.blockedQRs || 0}</p>
               <p className="text-sm text-gray-600">Blocked</p>
             </div>
           </div>
@@ -493,14 +745,14 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
                 type="text"
                 placeholder="Search QR codes..."
                 value={filters.search}
-                onChange={(e) => setFilters({ ...filters, search: e.target.value })}
+                onChange={(e) => handleFilterChange('search', e.target.value)}
                 className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent w-full"
               />
             </div>
           </div>
           <select
             value={filters.status}
-            onChange={(e) => setFilters({ ...filters, status: e.target.value })}
+            onChange={(e) => handleFilterChange('status', e.target.value)}
             className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           >
             <option value="">All Status</option>
@@ -512,7 +764,7 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
           </select>
           <select
             value={filters.type}
-            onChange={(e) => setFilters({ ...filters, type: e.target.value })}
+            onChange={(e) => handleFilterChange('type', e.target.value)}
             className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           >
             <option value="">All Types</option>
@@ -529,117 +781,230 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    QR Code
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Banking Info
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Type
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Status
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Branch
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Created
-                  </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {filteredQRs.map((qr) => (
-                  <tr key={qr.id} className="hover:bg-gray-50">
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="flex items-center">
-                        <QrCode className="h-5 w-5 text-gray-400 mr-3" />
-                        <div>
-                          <div className="text-sm font-medium text-gray-900">{qr.merchantName}</div>
-                          <div className="text-sm text-gray-500">{qr.merchantId}</div>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-900">
-                        {qr.bankName && (
-                          <div className="flex items-center space-x-1 mb-1">
-                            <Building className="h-3 w-3 text-gray-400" />
-                            <span>{qr.bankName}</span>
-                          </div>
-                        )}
-                        {qr.merchantName && (
-                          <div className="flex items-center space-x-1 mb-1">
-                            <Store className="h-3 w-3 text-gray-400" />
-                            <span>{qr.merchantName}</span>
-                          </div>
-                        )}
-                        {qr.merchantId && (
-                          <div className="flex items-center space-x-1 mb-1">
-                            <Hash className="h-3 w-3 text-gray-400" />
-                            <span>{qr.merchantId}</span>
-                          </div>
-                        )}
-                        {qr.terminalId && (
-                          <div className="flex items-center space-x-1">
-                            <Terminal className="h-3 w-3 text-gray-400" />
-                            <span>{qr.terminalId}</span>
-                          </div>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <span className="text-sm text-gray-900">{qr.qrType}</span>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      {getStatusBadge(qr.status)}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {qr.allocatedBranchId || 'N/A'}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {new Date(qr.createdAt).toLocaleDateString()}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                      <div className="flex items-center justify-end space-x-2">
-                        <button
-                          onClick={() => handlePrintQR(qr)}
-                          className="text-blue-600 hover:text-blue-900"
-                          title="Print QR Code"
-                        >
-                          <Printer className="h-4 w-4" />
-                        </button>
-                        <button
-                          onClick={() => openEditModal(qr)}
-                          className="text-indigo-600 hover:text-indigo-900"
-                          title="Edit QR Code"
-                        >
-                          <Edit className="h-4 w-4" />
-                        </button>
-                        {qr.status !== 'blocked' && (
-                          <button
-                            onClick={() => handleBlockQR(qr.id)}
-                            className="text-red-600 hover:text-red-900"
-                            title="Block QR Code"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        )}
-                      </div>
-                    </td>
+          <>
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      QR Code
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Banking Info
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Type
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Status
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Branch
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Created
+                    </th>
+                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Actions
+                    </th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {qrCodes.map((qr) => (
+                    <tr key={qr.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => showQRDetails(qr)}>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="flex items-center">
+                          <QrCode className="h-5 w-5 text-gray-400 mr-3" />
+                          <div>
+                            <div className="text-sm font-medium text-gray-900">{qr.qrValue}</div>
+                            <div className="text-sm text-gray-500">ID: {qr.id}</div>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="text-sm text-gray-900">
+                          {qr.bankName && (
+                            <div className="flex items-center space-x-1 mb-1">
+                              <Building className="h-3 w-3 text-gray-400" />
+                              <span>{qr.bankName}</span>
+                            </div>
+                          )}
+                          {qr.merchantName && (
+                            <div className="flex items-center space-x-1 mb-1">
+                              <Store className="h-3 w-3 text-gray-400" />
+                              <span>{qr.merchantName}</span>
+                            </div>
+                          )}
+                          {qr.merchantId && (
+                            <div className="flex items-center space-x-1 mb-1">
+                              <Hash className="h-3 w-3 text-gray-400" />
+                              <span>{qr.merchantId}</span>
+                            </div>
+                          )}
+                          {qr.terminalId && (
+                            <div className="flex items-center space-x-1">
+                              <Terminal className="h-3 w-3 text-gray-400" />
+                              <span>{qr.terminalId}</span>
+                            </div>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span className="text-sm text-gray-900 capitalize">{qr.qrType}</span>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        {getStatusBadge(qr.status)}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        {qr.allocatedBranchId || 'N/A'}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        {new Date(qr.createdAt).toLocaleDateString()}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                        <div className="flex items-center justify-end space-x-2" onClick={(e) => e.stopPropagation()}>
+                          {qr.status === 'unallocated' && (
+                            <button
+                              onClick={() => openAssignModal(qr)}
+                              className="text-green-600 hover:text-green-900"
+                              title="Assign QR Code to Branch"
+                            >
+                              <Building className="h-4 w-4" />
+                            </button>
+                          )}
+                          {qr.status !== 'blocked' ? (
+                            <>
+                              <button
+                                onClick={() => handlePrintQR(qr)}
+                                className="text-blue-600 hover:text-blue-900"
+                                title="Print QR Code"
+                              >
+                                <Printer className="h-4 w-4" />
+                              </button>
+                              <button
+                                onClick={() => openEditModal(qr)}
+                                className="text-indigo-600 hover:text-indigo-900"
+                                title="Edit QR Code"
+                              >
+                                <Edit className="h-4 w-4" />
+                              </button>
+                              <button
+                                onClick={() => handleBlockQR(qr.id)}
+                                className="text-red-600 hover:text-red-900"
+                                title="Block QR Code"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button
+                                onClick={() => handleUnblockQR(qr.id)}
+                                className="text-emerald-600 hover:text-emerald-900"
+                                title="Unblock QR Code"
+                              >
+                                <CheckCircle className="h-4 w-4" />
+                              </button>
+                              <button
+                                onClick={() => openEditModal(qr)}
+                                className="text-indigo-600 hover:text-indigo-900"
+                                title="Edit QR Code"
+                              >
+                                <Edit className="h-4 w-4" />
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            
+            {/* Pagination Controls */}
+            {qrCodes.length > 0 && (
+              <div className="px-6 py-4 border-t border-gray-200">
+                <div className="flex justify-center">
+                  <nav className="inline-flex items-center space-x-1">
+                    <button
+                      onClick={() => setCurrentPage(Math.max(0, currentPage - 1))}
+                      disabled={currentPage === 0}
+                      className="inline-flex items-center px-2 py-2 text-sm font-medium text-gray-500 bg-white border border-gray-300 rounded-l-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clipRule="evenodd" />
+                      </svg>
+                    </button>
+                    
+                    {Array.from({ length: Math.min(7, totalPages) }, (_, i) => {
+                      let pageNum;
+                      if (totalPages <= 7) {
+                        pageNum = i;
+                      } else if (currentPage < 3) {
+                        pageNum = i;
+                      } else if (currentPage > totalPages - 4) {
+                        pageNum = totalPages - 7 + i;
+                      } else {
+                        pageNum = currentPage - 3 + i;
+                      }
+                      
+                      return (
+                        <button
+                          key={pageNum}
+                          onClick={() => setCurrentPage(pageNum)}
+                          className={`inline-flex items-center px-4 py-2 text-sm font-medium border ${
+                            currentPage === pageNum
+                              ? 'z-10 bg-blue-50 border-blue-500 text-blue-600'
+                              : 'bg-white border-gray-300 text-gray-500 hover:bg-gray-50'
+                          }`}
+                        >
+                          {pageNum + 1}
+                        </button>
+                      );
+                    })}
+                    
+                    <button
+                      onClick={() => setCurrentPage(Math.min(totalPages - 1, currentPage + 1))}
+                      disabled={currentPage >= totalPages - 1}
+                      className="inline-flex items-center px-2 py-2 text-sm font-medium text-gray-500 bg-white border border-gray-300 rounded-r-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
+                      </svg>
+                    </button>
+                  </nav>
+                </div>
+                
+                {/* Page Size Selector */}
+                <div className="flex justify-center mt-4">
+                  <div className="flex items-center space-x-2">
+                    <span className="text-sm text-gray-700">Rows per page:</span>
+                    <select
+                      value={pageSize}
+                      onChange={(e) => {
+                        setPageSize(Number(e.target.value));
+                        setCurrentPage(0); // Reset to first page when page size changes
+                      }}
+                      className="border border-gray-300 rounded px-3 py-1 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    >
+                      <option value={10}>10</option>
+                      <option value={20}>20</option>
+                      <option value={50}>50</option>
+                      <option value={100}>100</option>
+                    </select>
+                  </div>
+                </div>
+                
+                {/* Results info */}
+                <div className="flex justify-center mt-2">
+                  <span className="text-sm text-gray-700">
+                    Showing {currentPage * pageSize + 1} to {Math.min((currentPage + 1) * pageSize, totalElements)} of {totalElements} QR codes
+                  </span>
+                </div>
+              </div>
+            )}
+          </>
         )}
       </div>
 
@@ -668,11 +1033,11 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
                 <label className="block text-sm font-medium text-gray-700 mb-2">QR Type</label>
                 <select
                   value={generateForm.type}
-                  onChange={(e) => setGenerateForm({ ...generateForm, type: e.target.value as 'static' | 'dynamic' })}
+                  onChange={(e) => setGenerateForm({ ...generateForm, type: e.target.value as 'STATIC' | 'DYNAMIC' })}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 >
-                  <option value="static">Static</option>
-                  <option value="dynamic">Dynamic</option>
+                  <option value="STATIC">Static</option>
+                  <option value="DYNAMIC">Dynamic</option>
                 </select>
               </div>
               
@@ -731,6 +1096,19 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
                       value={generateForm.terminalId}
                       onChange={(e) => setGenerateForm({ ...generateForm, terminalId: e.target.value })}
                       placeholder="e.g., T001"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Notes <span className="text-gray-500">(Optional)</span>
+                    </label>
+                    <textarea
+                      value={generateForm.notes}
+                      onChange={(e) => setGenerateForm({ ...generateForm, notes: e.target.value })}
+                      placeholder="Add any additional notes..."
+                      rows={3}
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     />
                   </div>
@@ -847,11 +1225,53 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
       {/* Edit QR Modal */}
       {showEditModal && selectedQR && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl p-6 w-full max-w-md">
+          <div className="bg-white rounded-xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
             <h2 className="text-xl font-bold text-gray-900 mb-4">
               Edit QR Code: {selectedQR.qrValue}
             </h2>
             <form onSubmit={handleUpdateQR} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Bank Name
+                </label>
+                <input
+                  type="text"
+                  value={editForm.bankName}
+                  onChange={(e) => setEditForm({ ...editForm, bankName: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Assigned Branch
+                </label>
+                <select
+                  value={editForm.branchId}
+                  onChange={(e) => setEditForm({ ...editForm, branchId: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                >
+                  <option value="">No Branch Assigned</option>
+                  {branches.map(branch => (
+                    <option key={branch.id} value={branch.id}>
+                      {branch.name} ({branch.branchCode})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Merchant Name
+                </label>
+                <input
+                  type="text"
+                  value={editForm.merchantName}
+                  onChange={(e) => setEditForm({ ...editForm, merchantName: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+              
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Merchant ID
@@ -887,6 +1307,19 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 />
               </div>
+
+              <div className="flex items-center">
+                <input
+                  type="checkbox"
+                  id="kycVerified"
+                  checked={editForm.kycVerified}
+                  onChange={(e) => setEditForm({ ...editForm, kycVerified: e.target.checked })}
+                  className="mr-2"
+                />
+                <label htmlFor="kycVerified" className="text-sm text-gray-700">
+                  KYC Verified
+                </label>
+              </div>
               
               <div className="flex space-x-3 pt-4">
                 <button
@@ -912,6 +1345,230 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
           </div>
         </div>
       )}
+
+      {/* Assign QR Modal */}
+      {showAssignModal && selectedQR && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
+            <h2 className="text-xl font-bold text-gray-900 mb-4">
+              Assign QR Code: {selectedQR.qrValue}
+            </h2>
+            <form onSubmit={handleAssignQR} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Assign to Branch <span className="text-red-500">*</span>
+                </label>
+                <select
+                  value={assignForm.branchId}
+                  onChange={(e) => setAssignForm({ ...assignForm, branchId: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  required
+                >
+                  <option value="">Choose a branch...</option>
+                  {branches.map(branch => (
+                    <option key={branch.id} value={branch.id}>
+                      {branch.name} ({branch.branchCode})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="border-t pt-4">
+                <h3 className="text-sm font-medium text-gray-900 mb-3">Merchant Information (Optional)</h3>
+                
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Bank Name
+                    </label>
+                    <input
+                      type="text"
+                      value={assignForm.bankName}
+                      onChange={(e) => setAssignForm({ ...assignForm, bankName: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Merchant Name
+                    </label>
+                    <input
+                      type="text"
+                      value={assignForm.merchantName}
+                      onChange={(e) => setAssignForm({ ...assignForm, merchantName: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Merchant ID
+                    </label>
+                    <input
+                      type="text"
+                      value={assignForm.merchantId}
+                      onChange={(e) => setAssignForm({ ...assignForm, merchantId: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Terminal ID
+                    </label>
+                    <input
+                      type="text"
+                      value={assignForm.terminalId}
+                      onChange={(e) => setAssignForm({ ...assignForm, terminalId: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Notes
+                    </label>
+                    <textarea
+                      value={assignForm.notes}
+                      onChange={(e) => setAssignForm({ ...assignForm, notes: e.target.value })}
+                      rows={3}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
+                </div>
+              </div>
+              
+              <div className="flex space-x-3 pt-4">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowAssignModal(false);
+                    setSelectedQR(null);
+                    resetAssignForm();
+                  }}
+                  className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={assigning}
+                  className="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"
+                >
+                  {assigning ? 'Assigning...' : 'Assign QR'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* QR Details Alert Dialog */}
+      <AlertDialog open={showQRDetailsDialog} onOpenChange={setShowQRDetailsDialog}>
+        <AlertDialogContent className="max-w-lg">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center space-x-2">
+              <QrCode className="h-5 w-5 text-blue-600" />
+              <span>QR Code Details</span>
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-4">
+                {selectedQR && (
+                  <>
+                    {/* QR Code Image */}
+                    <div className="flex justify-center py-4 bg-gray-50 rounded-lg">
+                      <div className="text-center">
+                        <img
+                          src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(selectedQR.qrValue)}`}
+                          alt="QR Code"
+                          className="w-48 h-48 border border-gray-200 rounded-lg bg-white p-2 mx-auto"
+                          onError={(e) => {
+                            const target = e.target as HTMLImageElement;
+                            target.style.display = 'none';
+                            const fallback = document.createElement('div');
+                            fallback.className = 'w-48 h-48 border border-gray-200 rounded-lg bg-white p-2 mx-auto flex items-center justify-center text-gray-500';
+                            fallback.innerHTML = '<span>QR Code Preview<br/>Not Available</span>';
+                            target.parentNode?.appendChild(fallback);
+                          }}
+                        />
+                        <p className="text-xs text-gray-500 mt-2">Scan to view QR content</p>
+                      </div>
+                    </div>
+                    
+                    {/* QR Details */}
+                    <div className="grid grid-cols-2 gap-2 text-sm">
+                      <div className="font-medium text-gray-700">QR Value:</div>
+                      <div className="text-gray-900 break-all">{selectedQR.qrValue}</div>
+                      
+                      <div className="font-medium text-gray-700">ID:</div>
+                      <div className="text-gray-900">{selectedQR.id}</div>
+                      
+                      <div className="font-medium text-gray-700">Type:</div>
+                      <div className="text-gray-900 capitalize">{selectedQR.qrType}</div>
+                      
+                      <div className="font-medium text-gray-700">Status:</div>
+                      <div>{getStatusBadge(selectedQR.status)}</div>
+                      
+                      {selectedQR.bankName && (
+                        <>
+                          <div className="font-medium text-gray-700">Bank:</div>
+                          <div className="text-gray-900">{selectedQR.bankName}</div>
+                        </>
+                      )}
+                      
+                      {selectedQR.merchantName && (
+                        <>
+                          <div className="font-medium text-gray-700">Merchant:</div>
+                          <div className="text-gray-900">{selectedQR.merchantName}</div>
+                        </>
+                      )}
+                      
+                      {selectedQR.merchantId && (
+                        <>
+                          <div className="font-medium text-gray-700">Merchant ID:</div>
+                          <div className="text-gray-900">{selectedQR.merchantId}</div>
+                        </>
+                      )}
+                      
+                      {selectedQR.terminalId && (
+                        <>
+                          <div className="font-medium text-gray-700">Terminal ID:</div>
+                          <div className="text-gray-900">{selectedQR.terminalId}</div>
+                        </>
+                      )}
+                      
+                      <div className="font-medium text-gray-700">Branch:</div>
+                      <div className="text-gray-900">{selectedQR.allocatedBranchId || 'Not Assigned'}</div>
+                      
+                      <div className="font-medium text-gray-700">Created:</div>
+                      <div className="text-gray-900">{new Date(selectedQR.createdAt).toLocaleDateString()}</div>
+                      
+                      {selectedQR.notes && (
+                        <>
+                          <div className="font-medium text-gray-700 col-span-2">Notes:</div>
+                          <div className="text-gray-900 col-span-2 bg-gray-50 p-2 rounded">{selectedQR.notes}</div>
+                        </>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setShowQRDetailsDialog(false)}>
+              Close
+            </AlertDialogCancel>
+            <AlertDialogAction 
+              onClick={() => selectedQR && handlePrintQR(selectedQR)}
+              className="bg-blue-600 hover:bg-blue-700"
+            >
+              Print QR
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };
