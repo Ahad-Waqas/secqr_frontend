@@ -60,8 +60,8 @@ export interface QRCodeCreateDto {
   count: number;
   type: 'STATIC' | 'DYNAMIC';
   bankName: string;
-  merchantName: string;
-  merchantId: string;
+  merchantName?: string;
+  merchantId?: string;
   terminalId?: string;
   branchId?: number;
   autoAssign?: boolean;

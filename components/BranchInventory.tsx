@@ -1,34 +1,74 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Building, QrCode, TrendingUp, AlertTriangle, 
-  Send, RefreshCw, BarChart3, Package, Plus
+  Send, RefreshCw, BarChart3, Package, Plus,
+  ChevronLeft, ChevronRight, Clock, Check, X, FileText
 } from 'lucide-react';
-import { User, BranchInventory, ThresholdRequest, Branch } from '../types';
-import { apiService } from '../services/api';
+import { 
+  User, 
+  BranchInventoryDto, 
+  ThresholdRequestResponseDto, 
+  PagedResponse 
+} from '../types';
+import { inventoryApiService } from '../services/inventory-api';
+import { branchApiService, BranchResponseDto } from '../services/branch-api';
+import { useDebounce } from '../hooks/useDebounce';
+import { useToast } from '../hooks/use-toast';
+
+// Utility function for handling API errors
+const handleApiError = (error: any, defaultMessage: string): string => {
+  console.error('API Error:', error);
+  
+  if (error.response?.data?.message) {
+    return error.response.data.message;
+  }
+  if (error.response?.data?.error) {
+    return error.response.data.error;
+  }
+  if (error.message) {
+    return error.message;
+  }
+  return defaultMessage;
+};
 
 interface BranchInventoryProps {
   user: User;
 }
 
 const BranchInventoryComponent: React.FC<BranchInventoryProps> = ({ user }) => {
-  const [inventory, setInventory] = useState<BranchInventory[]>([]);
-  const [branches, setBranches] = useState<Branch[]>([]);
-  const [thresholdRequests, setThresholdRequests] = useState<ThresholdRequest[]>([]);
+  // Main data state
+  const [inventory, setInventory] = useState<BranchInventoryDto[]>([]);
+  const [branches, setBranches] = useState<BranchResponseDto[]>([]);
+  const [thresholdRequestsData, setThresholdRequestsData] = useState<PagedResponse<ThresholdRequestResponseDto> | null>(null);
   const [loading, setLoading] = useState(true);
+  
+  // Pagination state for threshold requests
+  const [currentPage, setCurrentPage] = useState(0);
+  const [pageSize, setPageSize] = useState(10);
+  const [sortBy, setSortBy] = useState('createdAt');
+  const [sortDir, setSortDir] = useState('desc');
+  
+  // Filter state for threshold requests
+  const [filters, setFilters] = useState({ 
+    search: '', 
+    status: '', 
+    branchId: '' 
+  });
+  const debouncedSearch = useDebounce(filters.search, 500);
+
+  // Modal states
   const [showBulkAllocateModal, setShowBulkAllocateModal] = useState(false);
   const [showThresholdModal, setShowThresholdModal] = useState(false);
-  const [showRequestModal, setShowRequestModal] = useState(false);
   const [showBulkAssignModal, setShowBulkAssignModal] = useState(false);
-  const [selectedBranch, setSelectedBranch] = useState<BranchInventory | null>(null);
+  const [selectedBranch, setSelectedBranch] = useState<BranchInventoryDto | null>(null);
   
-  // Bulk allocation form
+  // Form states
   const [bulkForm, setBulkForm] = useState({
     branchId: '',
     count: 50
   });
   const [allocating, setAllocating] = useState(false);
   
-  // Bulk assignment form
   const [bulkAssignForm, setBulkAssignForm] = useState({
     sourceBranch: '',
     targetBranch: '',
@@ -36,37 +76,88 @@ const BranchInventoryComponent: React.FC<BranchInventoryProps> = ({ user }) => {
   });
   const [assigning, setAssigning] = useState(false);
   
-  // Threshold request form
   const [thresholdForm, setThresholdForm] = useState({
     requestedAmount: 100,
     reason: ''
   });
   const [requesting, setRequesting] = useState(false);
 
-  const isAdmin = user.role === 'system_admin';
-  const isBranchManager = user.role === 'branch_manager';
+  const { toast } = useToast();
+
+  // Role checks - updated to match backend role names
+  const isAdmin = user.role === 'SUPER_ADMIN' || user.role === 'ADMIN';
+  const isBranchManager = user.role === 'BRANCH_MANAGER';
+  const isBranchApprover = user.role === 'BRANCH_APPROVER';
+  const isAuditor = user.role === 'AUDITOR';
 
   useEffect(() => {
-    loadData();
+    loadInventoryData();
+    loadBranchesData();
   }, []);
 
-  const loadData = async () => {
+  useEffect(() => {
+    loadThresholdRequestsData();
+  }, [currentPage, pageSize, sortBy, sortDir, debouncedSearch, filters.status, filters.branchId]);
+
+  const loadInventoryData = async () => {
     setLoading(true);
     try {
-      const [inventoryData, branchesData, requestsData] = await Promise.all([
-        apiService.getBranchInventory(isBranchManager ? user.branchId : undefined),
-        apiService.getBranches(),
-        apiService.getThresholdRequests(isBranchManager ? user.branchId : undefined)
-      ]);
-      
+      const branchId = isBranchManager || isBranchApprover ? user.branchId?.toString() : undefined;
+      const inventoryData = await inventoryApiService.getBranchInventory(branchId);
       setInventory(inventoryData);
-      setBranches(branchesData);
-      setThresholdRequests(requestsData);
+      console.log('Inventory data loaded:', inventoryData);
     } catch (error) {
-      console.error('Failed to load data:', error);
+      const errorMessage = handleApiError(error, 'Failed to load inventory data');
+      toast({
+        title: "Error",
+        description: errorMessage,
+        variant: "destructive",
+      });
     } finally {
       setLoading(false);
     }
+  };
+
+  const loadBranchesData = async () => {
+    try {
+      const branchesData = await branchApiService.getBranches();
+      setBranches(branchesData);
+    } catch (error) {
+      const errorMessage = handleApiError(error, 'Failed to load branches');
+      toast({
+        title: "Error",
+        description: errorMessage,
+        variant: "destructive",
+      });
+    }
+  };
+
+  const loadThresholdRequestsData = async () => {
+    try {
+      const branchId = isBranchManager || isBranchApprover ? user.branchId?.toString() : filters.branchId || undefined;
+      const requestsData = await inventoryApiService.getThresholdRequests(
+        branchId,
+        filters.status || undefined,
+        currentPage,
+        pageSize,
+        sortBy,
+        sortDir
+      );
+      setThresholdRequestsData(requestsData);
+    } catch (error) {
+      const errorMessage = handleApiError(error, 'Failed to load threshold requests');
+      toast({
+        title: "Error",
+        description: errorMessage,
+        variant: "destructive",
+      });
+    }
+  };
+
+  const loadData = () => {
+    loadInventoryData();
+    loadBranchesData();
+    loadThresholdRequestsData();
   };
 
   const handleBulkAllocate = async (e: React.FormEvent) => {
@@ -74,12 +165,21 @@ const BranchInventoryComponent: React.FC<BranchInventoryProps> = ({ user }) => {
     setAllocating(true);
     
     try {
-      await apiService.bulkAllocateQRs(bulkForm.branchId, bulkForm.count);
+      await inventoryApiService.bulkAllocateQRs(bulkForm.branchId, bulkForm.count);
+      toast({
+        title: "Success",
+        description: `Successfully allocated ${bulkForm.count} QR codes to branch`,
+      });
       setShowBulkAllocateModal(false);
       setBulkForm({ branchId: '', count: 50 });
       loadData();
     } catch (error) {
-      console.error('Failed to allocate QRs:', error);
+      const errorMessage = handleApiError(error, 'Failed to allocate QR codes');
+      toast({
+        title: "Error",
+        description: errorMessage,
+        variant: "destructive",
+      });
     } finally {
       setAllocating(false);
     }
@@ -90,12 +190,25 @@ const BranchInventoryComponent: React.FC<BranchInventoryProps> = ({ user }) => {
     setAssigning(true);
     
     try {
-      await apiService.bulkAssignQRs(bulkAssignForm.sourceBranch, bulkAssignForm.targetBranch, bulkAssignForm.count);
+      await inventoryApiService.bulkAssignQRs(
+        bulkAssignForm.sourceBranch, 
+        bulkAssignForm.targetBranch, 
+        bulkAssignForm.count
+      );
+      toast({
+        title: "Success",
+        description: `Successfully assigned ${bulkAssignForm.count} QR codes between branches`,
+      });
       setShowBulkAssignModal(false);
       setBulkAssignForm({ sourceBranch: '', targetBranch: '', count: 10 });
       loadData();
     } catch (error) {
-      console.error('Failed to assign QRs:', error);
+      const errorMessage = handleApiError(error, 'Failed to assign QR codes');
+      toast({
+        title: "Error",
+        description: errorMessage,
+        variant: "destructive",
+      });
     } finally {
       setAssigning(false);
     }
@@ -107,19 +220,30 @@ const BranchInventoryComponent: React.FC<BranchInventoryProps> = ({ user }) => {
     
     setRequesting(true);
     try {
-      await apiService.createThresholdRequest(selectedBranch.branchId, {
+      await inventoryApiService.createThresholdRequest(selectedBranch.branchId, {
+        branchId: selectedBranch.branchId,
         currentInventory: selectedBranch.available,
         threshold: 20, // Default threshold
         requestedAmount: thresholdForm.requestedAmount,
         reason: thresholdForm.reason
       });
       
+      toast({
+        title: "Success",
+        description: 'Threshold request created successfully',
+      });
+      
       setShowThresholdModal(false);
       setThresholdForm({ requestedAmount: 100, reason: '' });
       setSelectedBranch(null);
-      loadData();
+      loadThresholdRequestsData();
     } catch (error) {
-      console.error('Failed to create threshold request:', error);
+      const errorMessage = handleApiError(error, 'Failed to create threshold request');
+      toast({
+        title: "Error",
+        description: errorMessage,
+        variant: "destructive",
+      });
     } finally {
       setRequesting(false);
     }
@@ -127,19 +251,38 @@ const BranchInventoryComponent: React.FC<BranchInventoryProps> = ({ user }) => {
 
   const handleApproveRequest = async (requestId: string) => {
     try {
-      await apiService.approveThresholdRequest(requestId);
-      loadData();
+      await inventoryApiService.approveThresholdRequest(requestId);
+      toast({
+        title: "Success",
+        description: 'Request approved successfully',
+      });
+      loadThresholdRequestsData();
+      loadInventoryData(); // Refresh inventory as QRs might have been allocated
     } catch (error) {
-      console.error('Failed to approve request:', error);
+      const errorMessage = handleApiError(error, 'Failed to approve request');
+      toast({
+        title: "Error",
+        description: errorMessage,
+        variant: "destructive",
+      });
     }
   };
 
-  const handleRejectRequest = async (requestId: string) => {
+  const handleRejectRequest = async (requestId: string, reason: string = 'Request rejected by admin') => {
     try {
-      await apiService.rejectThresholdRequest(requestId, 'Request rejected by admin');
-      loadData();
+      await inventoryApiService.rejectThresholdRequest(requestId, reason);
+      toast({
+        title: "Success",
+        description: 'Request rejected successfully',
+      });
+      loadThresholdRequestsData();
     } catch (error) {
-      console.error('Failed to reject request:', error);
+      const errorMessage = handleApiError(error, 'Failed to reject request');
+      toast({
+        title: "Error",
+        description: errorMessage,
+        variant: "destructive",
+      });
     }
   };
 
@@ -149,14 +292,14 @@ const BranchInventoryComponent: React.FC<BranchInventoryProps> = ({ user }) => {
     return 'text-emerald-600 bg-emerald-100';
   };
 
-  const getInventoryStatus = (branch: BranchInventory) => {
+  const getInventoryStatus = (branch: BranchInventoryDto) => {
     if (branch.available <= 10) return { status: 'critical', color: 'bg-red-500', text: 'Critical' };
     if (branch.available <= 20) return { status: 'low', color: 'bg-amber-500', text: 'Low' };
     return { status: 'good', color: 'bg-emerald-500', text: 'Good' };
   };
 
-  const getBranchName = (branchId: string) => {
-    const branch = branches.find(b => b.id === branchId);
+  const getBranchName = (branchId: string | number) => {
+    const branch = branches.find(b => b.id.toString() === branchId.toString());
     return branch ? branch.name : 'Unknown Branch';
   };
 
@@ -173,6 +316,9 @@ const BranchInventoryComponent: React.FC<BranchInventoryProps> = ({ user }) => {
       </span>
     );
   };
+
+  // Filter threshold requests for display
+  const filteredThresholdRequests = thresholdRequestsData?.content || [];
 
   return (
     <div className="space-y-6">
@@ -300,7 +446,7 @@ const BranchInventoryComponent: React.FC<BranchInventoryProps> = ({ user }) => {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Status
                   </th>
-                  {isBranchManager && (
+                  {(isBranchManager || isBranchApprover) && (
                     <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Actions
                     </th>
@@ -351,7 +497,7 @@ const BranchInventoryComponent: React.FC<BranchInventoryProps> = ({ user }) => {
                           {status.text}
                         </span>
                       </td>
-                      {isBranchManager && (
+                      {(isBranchManager || isBranchApprover) && (
                         <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                           {branch.available <= 20 && (
                             <button
@@ -376,61 +522,209 @@ const BranchInventoryComponent: React.FC<BranchInventoryProps> = ({ user }) => {
       </div>
 
       {/* Threshold Requests */}
-      {(isAdmin || isBranchManager) && thresholdRequests.length > 0 && (
+      {(isAdmin || isBranchManager || isBranchApprover || isAuditor) && (
         <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-          <div className="px-6 py-3 border-b border-gray-200 bg-gray-50">
+          <div className="px-6 py-3 border-b border-gray-200 bg-gray-50 flex justify-between items-center">
             <h2 className="text-lg font-medium text-gray-900">
-              {isAdmin ? 'Threshold Requests' : 'My Requests'}
+              {isAdmin || isAuditor ? 'Threshold Requests' : 'My Requests'}
             </h2>
+            
+            {/* Filters for threshold requests */}
+            <div className="flex items-center space-x-4">
+              {(isAdmin || isAuditor) && (
+                <select
+                  value={filters.branchId}
+                  onChange={(e) => {
+                    setFilters({ ...filters, branchId: e.target.value });
+                    setCurrentPage(0);
+                  }}
+                  className="text-sm px-3 py-1 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                >
+                  <option value="">All Branches</option>
+                  {branches.map(branch => (
+                    <option key={branch.id} value={branch.id}>
+                      {branch.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+              
+              <select
+                value={filters.status}
+                onChange={(e) => {
+                  setFilters({ ...filters, status: e.target.value });
+                  setCurrentPage(0);
+                }}
+                className="text-sm px-3 py-1 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              >
+                <option value="">All Status</option>
+                <option value="pending">Pending</option>
+                <option value="approved">Approved</option>
+                <option value="rejected">Rejected</option>
+              </select>
+            </div>
           </div>
           
-          <div className="divide-y divide-gray-200">
-            {thresholdRequests.map((request) => (
-              <div key={request.id} className="p-6">
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <div className="flex items-center space-x-3 mb-2">
-                      <h3 className="text-sm font-medium text-gray-900">
-                        {getBranchName(request.branchId)}
-                      </h3>
-                      {getStatusBadge(request.status)}
+          {filteredThresholdRequests.length === 0 ? (
+            <div className="p-8 text-center">
+              <FileText className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+              <h3 className="text-lg font-medium text-gray-900 mb-2">No threshold requests found</h3>
+              <p className="text-gray-500">
+                {isBranchManager ? 'Create a request when inventory is low.' : 'No requests match your current filters.'}
+              </p>
+            </div>
+          ) : (
+            <>
+              <div className="divide-y divide-gray-200">
+                {filteredThresholdRequests.map((request) => (
+                  <div key={request.id} className="p-6">
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1">
+                        <div className="flex items-center space-x-3 mb-2">
+                          <h3 className="text-sm font-medium text-gray-900">
+                            {request.branchName}
+                          </h3>
+                          {getStatusBadge(request.status)}
+                        </div>
+                        
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-3">
+                          <div className="text-sm text-gray-600">
+                            <span className="font-medium">Current Inventory:</span> {request.currentInventory}
+                          </div>
+                          <div className="text-sm text-gray-600">
+                            <span className="font-medium">Requested Amount:</span> {request.requestedAmount}
+                          </div>
+                          <div className="text-sm text-gray-600">
+                            <span className="font-medium">Requested By:</span> {request.requestedBy}
+                          </div>
+                        </div>
+                        
+                        <div className="text-sm text-gray-600 mb-2">
+                          <span className="font-medium">Reason:</span> {request.reason}
+                        </div>
+                        
+                        <div className="text-xs text-gray-500">
+                          Created: {new Date(request.createdAt).toLocaleDateString()} at {new Date(request.createdAt).toLocaleTimeString()}
+                          {request.processedAt && (
+                            <span className="ml-4">
+                              Processed: {new Date(request.processedAt).toLocaleDateString()} at {new Date(request.processedAt).toLocaleTimeString()}
+                            </span>
+                          )}
+                        </div>
+
+                        {request.rejectionReason && (
+                          <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded text-sm text-red-700">
+                            <span className="font-medium">Rejection Reason:</span> {request.rejectionReason}
+                          </div>
+                        )}
+                      </div>
+                      
+                      {isAdmin && request.status === 'pending' && (
+                        <div className="flex items-center space-x-2 ml-4">
+                          <button
+                            onClick={() => handleApproveRequest(request.id)}
+                            className="flex items-center space-x-1 px-3 py-1 bg-emerald-600 text-white text-sm rounded hover:bg-emerald-700"
+                          >
+                            <Check className="h-4 w-4" />
+                            <span>Approve</span>
+                          </button>
+                          <button
+                            onClick={() => {
+                              const reason = window.prompt('Please provide a rejection reason:');
+                              if (reason) {
+                                handleRejectRequest(request.id, reason);
+                              }
+                            }}
+                            className="flex items-center space-x-1 px-3 py-1 bg-red-600 text-white text-sm rounded hover:bg-red-700"
+                          >
+                            <X className="h-4 w-4" />
+                            <span>Reject</span>
+                          </button>
+                        </div>
+                      )}
                     </div>
-                    
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-3">
-                      <div className="text-sm text-gray-600">
-                        <span className="font-medium">Current Inventory:</span> {request.currentInventory}
-                      </div>
-                      <div className="text-sm text-gray-600">
-                        <span className="font-medium">Requested Amount:</span> {request.requestedAmount}
-                      </div>
-                      <div className="text-sm text-gray-600">
-                        <span className="font-medium">Created:</span> {new Date(request.createdAt).toLocaleDateString()}
-                      </div>
-                    </div>
-                    
-                    <p className="text-sm text-gray-600">{request.reason}</p>
                   </div>
-                  
-                  {isAdmin && request.status === 'pending' && (
-                    <div className="ml-6 flex space-x-2">
-                      <button
-                        onClick={() => handleRejectRequest(request.id)}
-                        className="px-3 py-1 text-sm border border-red-300 text-red-700 rounded-lg hover:bg-red-50"
+                ))}
+              </div>
+
+              {/* Pagination Controls for Threshold Requests */}
+              {thresholdRequestsData && thresholdRequestsData.pageInfo.totalPages > 1 && (
+                <div className="px-6 py-4 border-t border-gray-200 bg-gray-50">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-2 text-sm text-gray-700">
+                      <span>
+                        Showing {thresholdRequestsData.pageInfo.pageNumber * thresholdRequestsData.pageInfo.pageSize + 1} to{' '}
+                        {Math.min(
+                          (thresholdRequestsData.pageInfo.pageNumber + 1) * thresholdRequestsData.pageInfo.pageSize,
+                          thresholdRequestsData.pageInfo.totalElements
+                        )}{' '}
+                        of {thresholdRequestsData.pageInfo.totalElements} requests
+                      </span>
+                      
+                      <select
+                        value={pageSize}
+                        onChange={(e) => {
+                          setPageSize(Number(e.target.value));
+                          setCurrentPage(0);
+                        }}
+                        className="ml-4 px-2 py-1 border border-gray-300 rounded text-sm"
                       >
-                        Reject
+                        <option value={5}>5 per page</option>
+                        <option value={10}>10 per page</option>
+                        <option value={20}>20 per page</option>
+                        <option value={50}>50 per page</option>
+                      </select>
+                    </div>
+
+                    <div className="flex items-center space-x-2">
+                      <button
+                        onClick={() => setCurrentPage(Math.max(0, currentPage - 1))}
+                        disabled={thresholdRequestsData.pageInfo.first}
+                        className="flex items-center space-x-1 px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <ChevronLeft className="h-4 w-4" />
+                        <span>Previous</span>
                       </button>
+
+                      <div className="flex items-center space-x-1">
+                        {Array.from({ length: Math.min(5, thresholdRequestsData.pageInfo.totalPages) }, (_, i) => {
+                          const pageNum = Math.max(0, Math.min(
+                            thresholdRequestsData.pageInfo.totalPages - 5,
+                            currentPage - 2
+                          )) + i;
+                          
+                          if (pageNum >= thresholdRequestsData.pageInfo.totalPages) return null;
+                          
+                          return (
+                            <button
+                              key={pageNum}
+                              onClick={() => setCurrentPage(pageNum)}
+                              className={`px-3 py-2 text-sm border rounded-lg ${
+                                pageNum === currentPage
+                                  ? 'bg-blue-600 text-white border-blue-600'
+                                  : 'border-gray-300 hover:bg-gray-50'
+                              }`}
+                            >
+                              {pageNum + 1}
+                            </button>
+                          );
+                        })}
+                      </div>
+
                       <button
-                        onClick={() => handleApproveRequest(request.id)}
-                        className="px-3 py-1 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700"
+                        onClick={() => setCurrentPage(Math.min(thresholdRequestsData.pageInfo.totalPages - 1, currentPage + 1))}
+                        disabled={thresholdRequestsData.pageInfo.last}
+                        className="flex items-center space-x-1 px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        Approve
+                        <span>Next</span>
+                        <ChevronRight className="h-4 w-4" />
                       </button>
                     </div>
-                  )}
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
+              )}
+            </>
+          )}
         </div>
       )}
 
@@ -523,7 +817,7 @@ const BranchInventoryComponent: React.FC<BranchInventoryProps> = ({ user }) => {
                   required
                 >
                   <option value="">Choose target branch...</option>
-                  {branches.filter(branch => branch.id !== bulkAssignForm.sourceBranch).map(branch => (
+                  {branches.filter(branch => branch.id.toString() !== bulkAssignForm.sourceBranch).map(branch => (
                     <option key={branch.id} value={branch.id}>
                       {branch.name} ({branch.branchCode})
                     </option>

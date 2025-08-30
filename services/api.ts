@@ -56,8 +56,8 @@ class ApiService {
     terminalId?: string;
   }): Promise<QRCode[]> {
     // Validate mandatory fields
-    if (!metadata?.bankName || !metadata?.merchantName || !metadata?.merchantId) {
-      throw new Error('Bank Name, Merchant Name, and Merchant ID are required fields');
+    if (!metadata?.bankName) {
+      throw new Error('Bank Name is required');
     }
     
     // Mock QR generation
@@ -68,7 +68,9 @@ class ApiService {
       generationSource: 'system',
       status: 'unallocated',
       bankName: metadata?.bankName,
-      merchantName: metadata?.merchantName,
+      merchantName: metadata?.merchantName || undefined,
+      merchantId: metadata?.merchantId || undefined,
+      createdBy: 'system',
       createdAt: new Date().toISOString(),
       terminalId: metadata?.terminalId || undefined,
       updatedAt: new Date().toISOString()
@@ -87,7 +89,7 @@ class ApiService {
       qrValue: `UPL${Date.now()}${String(i).padStart(3, '0')}`,
       qrType: 'static',
       generationSource: 'upload',
-      merchantBankAccount: metadata?.merchantBankAccount,
+      status: 'unallocated',
       uploadFileId: `file_${Date.now()}`,
       createdBy: this.currentUser?.id || '1',
       createdAt: new Date().toISOString(),

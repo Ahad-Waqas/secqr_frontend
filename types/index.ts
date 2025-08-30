@@ -3,7 +3,7 @@ export interface User {
   username: string;
   email: string;
   name: string;
-  role: 'SUPER_ADMIN' | 'BRANCH_MANAGER' | 'BRANCH_APPROVER' | 'REQUEST_INITIATOR' | 'SALES_USER' | 'AUDITOR';
+  role: 'SUPER_ADMIN' | 'ADMIN' | 'BRANCH_MANAGER' | 'BRANCH_APPROVER' | 'REQUEST_INITIATOR' | 'SALES_USER' | 'AUDITOR';
   branchId?: string;
   phone: string;
   status: 'active' | 'inactive';
@@ -334,6 +334,99 @@ export interface ThresholdRequest {
   createdAt: string;
   reviewedBy?: string;
   reviewedAt?: string;
+}
+
+// Backend Inventory Types
+export interface BranchInventoryDto {
+  branchId: string;
+  branchName: string;
+  branchCode: string;
+  totalAllocated: number;
+  available: number;
+  issued: number;
+  returned: number;
+  blocked: number;
+  utilizationRate: number;
+  lastUpdated: string;
+}
+
+export interface ThresholdRequestDto {
+  branchId: string;
+  currentInventory: number;
+  threshold: number;
+  requestedAmount: number;
+  reason: string;
+}
+
+export interface ThresholdRequestResponseDto {
+  id: string;
+  branchId: string;
+  branchName: string;
+  currentInventory: number;
+  threshold: number;
+  requestedAmount: number;
+  reason: string;
+  status: 'pending' | 'approved' | 'rejected';
+  requestedBy: string;
+  approvedBy?: string;
+  rejectedBy?: string;
+  rejectionReason?: string;
+  createdAt: string;
+  processedAt?: string;
+}
+
+export interface BulkAllocateDto {
+  branchId: string;
+  count: number;
+}
+
+export interface BulkAssignDto {
+  sourceBranchId: string;
+  targetBranchId: string;
+  count: number;
+}
+
+export interface RequestApprovalDto {
+  rejectionReason?: string;
+}
+
+export interface QRCodeResponseDto {
+  id: string;
+  qrValue: string;
+  qrType: string;
+  status: string;
+  allocatedBranch?: {
+    id: string;
+    name: string;
+  };
+  issuedBranch?: {
+    id: string;
+    name: string;
+  };
+  createdAt: string;
+  allocatedAt?: string;
+  issuedAt?: string;
+}
+
+export interface PagedResponse<T> {
+  content: T[];
+  pageInfo: {
+    pageNumber: number;
+    pageSize: number;
+    totalElements: number;
+    totalPages: number;
+    first: boolean;
+    last: boolean;
+    hasNext: boolean;
+    hasPrevious: boolean;
+  };
+}
+
+export interface ApiResponse<T> {
+  success: boolean;
+  message: string;
+  data: T;
+  timestamp: string;
 }
 
 export interface MerchantRequest {

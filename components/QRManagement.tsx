@@ -5,7 +5,7 @@ import {
   Building, Store, Hash, Terminal, FileText
 } from 'lucide-react';
 import { User, QRCode } from '../types';
-import { qrCodeApiService, QRCodeCreateDto, QRCodeUpdateDto, QRCodeStatsDto } from '../services/qr-api';
+import { qrCodeApiService, QRCodeCreateDto, QRCodeUpdateDto, QRCodeStatsDto, QRCodeIssueDto } from '../services/qr-api';
 import { branchApiService, BranchResponseDto } from '../services/branch-api';
 import { toast } from "@/components/ui/use-toast";
 import {
@@ -47,6 +47,7 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showAssignModal, setShowAssignModal] = useState(false);
+  const [showIssueModal, setShowIssueModal] = useState(false);
   const [showQRDetailsDialog, setShowQRDetailsDialog] = useState(false);
   const [selectedQR, setSelectedQR] = useState<QRCode | null>(null);
   const [filters, setFilters] = useState({ search: '', status: '', type: '' });
@@ -98,6 +99,15 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
   });
   const [assigning, setAssigning] = useState(false);
 
+  // Issue form state
+  const [issueForm, setIssueForm] = useState({
+    branchId: '',
+    merchantId: '',
+    merchantName: '',
+    notes: ''
+  });
+  const [issuing, setIssuing] = useState(false);
+
   const [branches, setBranches] = useState<BranchResponseDto[]>([]);
 
   const canManageQRs = user.role === 'SUPER_ADMIN';
@@ -135,9 +145,11 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
           currentPage,
           pageSize
         );
+        console.log('Search result:', result);
       } else {
         // Use regular get all API
         result = await qrCodeApiService.getAllQRCodes(currentPage, pageSize);
+        console.log('Get all result:', result);
       }
       
       setQrCodes(result.qrCodes);
@@ -188,8 +200,8 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
         count: generateForm.count,
         type: generateForm.type,
         bankName: generateForm.bankName,
-        merchantName: generateForm.merchantName,
-        merchantId: generateForm.merchantId,
+        merchantName: generateForm.merchantName || undefined,
+        merchantId: generateForm.merchantId || undefined,
         terminalId: generateForm.terminalId || undefined,
         branchId: generateForm.autoAssign && generateForm.branchId ? Number(generateForm.branchId) : undefined,
         autoAssign: generateForm.autoAssign,
@@ -544,6 +556,62 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
     }
   };
 
+  const handleIssueQR = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedQR) return;
+    
+    setIssuing(true);
+    try {
+      // If QR is unallocated, first allocate it to the selected branch
+      if (selectedQR.status === 'unallocated') {
+        if (!issueForm.branchId) {
+          toast({
+            title: "Validation Error",
+            description: "Please select a branch to assign the QR code to",
+            variant: "destructive",
+          });
+          setIssuing(false);
+          return;
+        }
+        
+        // Allocate QR to branch first
+        await qrCodeApiService.allocateQRsToBranch([selectedQR.id], Number(issueForm.branchId));
+      }
+
+      // Now issue the QR to merchant
+      const issueData: QRCodeIssueDto = {
+        qrCodeId: Number(selectedQR.id),
+        merchantId: issueForm.merchantId,
+        merchantName: issueForm.merchantName,
+        notes: issueForm.notes || undefined
+      };
+
+      await qrCodeApiService.issueQRToMerchant(issueData);
+      
+      setShowIssueModal(false);
+      setSelectedQR(null);
+      resetIssueForm();
+      loadQRCodes();
+      loadStats();
+      toast({
+        title: "Success",
+        description: selectedQR.status === 'unallocated' 
+          ? "QR code assigned to branch and issued to merchant successfully"
+          : "QR code issued to merchant successfully",
+      });
+    } catch (error) {
+      console.error('Failed to issue QR code:', error);
+      const errorMessage = handleApiError(error, 'Failed to issue QR code');
+      toast({
+        title: "Error",
+        description: errorMessage,
+        variant: "destructive",
+      });
+    } finally {
+      setIssuing(false);
+    }
+  };
+
   const showQRDetails = (qr: QRCode) => {
     setSelectedQR(qr);
     setShowQRDetailsDialog(true);
@@ -560,6 +628,15 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
     });
   };
 
+  const resetIssueForm = () => {
+    setIssueForm({
+      branchId: '',
+      merchantId: '',
+      merchantName: '',
+      notes: ''
+    });
+  };
+
   const openAssignModal = (qr: QRCode) => {
     setSelectedQR(qr);
     setAssignForm({
@@ -571,6 +648,17 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
       bankName: qr.bankName || '',
     });
     setShowAssignModal(true);
+  };
+
+  const openIssueModal = (qr: QRCode) => {
+    setSelectedQR(qr);
+    setIssueForm({
+      branchId: qr.allocatedBranchId?.toString() || '',
+      merchantId: qr.merchantId || '',
+      merchantName: qr.merchantName || '',
+      notes: ''
+    });
+    setShowIssueModal(true);
   };
 
   const resetGenerateForm = () => {
@@ -864,12 +952,30 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
                       <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                         <div className="flex items-center justify-end space-x-2" onClick={(e) => e.stopPropagation()}>
                           {qr.status === 'unallocated' && (
+                            <>
+                              <button
+                                onClick={() => openAssignModal(qr)}
+                                className="text-green-600 hover:text-green-900"
+                                title="Assign QR Code to Branch"
+                              >
+                                <Building className="h-4 w-4" />
+                              </button>
+                              <button
+                                onClick={() => openIssueModal(qr)}
+                                className="text-purple-600 hover:text-purple-900"
+                                title="Assign to Branch & Issue to Merchant"
+                              >
+                                <CheckCircle className="h-4 w-4" />
+                              </button>
+                            </>
+                          )}
+                          {qr.status === 'allocated' && (
                             <button
-                              onClick={() => openAssignModal(qr)}
-                              className="text-green-600 hover:text-green-900"
-                              title="Assign QR Code to Branch"
+                              onClick={() => openIssueModal(qr)}
+                              className="text-purple-600 hover:text-purple-900"
+                              title="Issue QR Code to Merchant"
                             >
-                              <Building className="h-4 w-4" />
+                              <CheckCircle className="h-4 w-4" />
                             </button>
                           )}
                           {qr.status !== 'blocked' ? (
@@ -1061,7 +1167,7 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
                   
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Merchant Name <span className="text-red-500">*</span>
+                      Merchant Name <span className="text-gray-500">(Optional)</span>
                     </label>
                     <input
                       type="text"
@@ -1069,13 +1175,12 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
                       onChange={(e) => setGenerateForm({ ...generateForm, merchantName: e.target.value })}
                       placeholder="e.g., Coffee Corner"
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      required
                     />
                   </div>
                   
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Merchant ID <span className="text-red-500">*</span>
+                      Merchant ID <span className="text-gray-500">(Optional)</span>
                     </label>
                     <input
                       type="text"
@@ -1083,7 +1188,6 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
                       onChange={(e) => setGenerateForm({ ...generateForm, merchantId: e.target.value })}
                       placeholder="e.g., MCH001"
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      required
                     />
                   </div>
                   
@@ -1457,6 +1561,111 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
                   className="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"
                 >
                   {assigning ? 'Assigning...' : 'Assign QR'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Issue QR Modal */}
+      {showIssueModal && selectedQR && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
+            <h2 className="text-xl font-bold text-gray-900 mb-4">
+              {selectedQR.status === 'unallocated' 
+                ? `Assign & Issue QR Code: ${selectedQR.qrValue}`
+                : `Issue QR Code to Merchant: ${selectedQR.qrValue}`}
+            </h2>
+            <form onSubmit={handleIssueQR} className="space-y-4">
+              {selectedQR.status === 'unallocated' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Assign to Branch <span className="text-red-500">*</span>
+                  </label>
+                  <select
+                    value={issueForm.branchId}
+                    onChange={(e) => setIssueForm({ ...issueForm, branchId: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    required
+                  >
+                    <option value="">Choose a branch...</option>
+                    {branches.map(branch => (
+                      <option key={branch.id} value={branch.id}>
+                        {branch.name} ({branch.branchCode})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              
+              <div className={selectedQR.status === 'unallocated' ? 'border-t pt-4' : ''}>
+                {selectedQR.status === 'unallocated' && (
+                  <h3 className="text-sm font-medium text-gray-900 mb-3">Merchant Information</h3>
+                )}
+                
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Merchant ID <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={issueForm.merchantId}
+                      onChange={(e) => setIssueForm({ ...issueForm, merchantId: e.target.value })}
+                      placeholder="e.g., MCH001"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      required
+                    />
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Merchant Name <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={issueForm.merchantName}
+                      onChange={(e) => setIssueForm({ ...issueForm, merchantName: e.target.value })}
+                      placeholder="e.g., Coffee Corner"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      required
+                    />
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Notes <span className="text-gray-500">(Optional)</span>
+                    </label>
+                    <textarea
+                      value={issueForm.notes}
+                      onChange={(e) => setIssueForm({ ...issueForm, notes: e.target.value })}
+                      placeholder="Add issuance notes..."
+                      rows={3}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
+                </div>
+              </div>
+              
+              <div className="flex space-x-3 pt-4">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowIssueModal(false);
+                    setSelectedQR(null);
+                    resetIssueForm();
+                  }}
+                  className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={issuing}
+                  className="flex-1 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50"
+                >
+                  {issuing ? 'Processing...' : (selectedQR.status === 'unallocated' ? 'Assign & Issue QR' : 'Issue QR')}
                 </button>
               </div>
             </form>
