@@ -2,10 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { 
   QrCode, Plus, Upload, Download, Search, Filter, 
   Eye, Printer, Edit, Trash2, AlertTriangle, CheckCircle,
-  Building, Store, Hash, Terminal, FileText
+  Building, Store, Hash, Terminal, FileText, RotateCcw
 } from 'lucide-react';
 import { User, QRCode } from '../types';
-import { qrCodeApiService, QRCodeCreateDto, QRCodeUpdateDto, QRCodeStatsDto, QRCodeIssueDto } from '../services/qr-api';
+import { qrCodeApiService, QRCodeCreateDto, QRCodeUpdateDto, QRCodeStatsDto, QRCodeIssueDto, QRCodeReturnDto } from '../services/qr-api';
 import { branchApiService, BranchResponseDto } from '../services/branch-api';
 import { toast } from "@/components/ui/use-toast";
 import {
@@ -18,6 +18,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 
 // Utility function for handling API errors
 const handleApiError = (error: any, defaultMessage: string): string => {
@@ -48,6 +49,7 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
   const [showEditModal, setShowEditModal] = useState(false);
   const [showAssignModal, setShowAssignModal] = useState(false);
   const [showIssueModal, setShowIssueModal] = useState(false);
+  const [showReturnModal, setShowReturnModal] = useState(false);
   const [showQRDetailsDialog, setShowQRDetailsDialog] = useState(false);
   const [selectedQR, setSelectedQR] = useState<QRCode | null>(null);
   const [filters, setFilters] = useState({ search: '', status: '', type: '' });
@@ -108,6 +110,12 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
   });
   const [issuing, setIssuing] = useState(false);
 
+  // Return form state
+  const [returnForm, setReturnForm] = useState({
+    reason: ''
+  });
+  const [returning, setReturning] = useState(false);
+
   const [branches, setBranches] = useState<BranchResponseDto[]>([]);
 
   const canManageQRs = user.role === 'SUPER_ADMIN';
@@ -149,7 +157,7 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
       } else {
         // Use regular get all API
         result = await qrCodeApiService.getAllQRCodes(currentPage, pageSize);
-        console.log('Get all result:', result);
+        console.log('Get all result:', result.qrCodes[1].returnedReason);
       }
       
       setQrCodes(result.qrCodes);
@@ -612,6 +620,36 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
     }
   };
 
+  const handleReturnQR = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedQR) return;
+    
+    setReturning(true);
+    try {
+      await qrCodeApiService.returnQRCode(selectedQR.id, returnForm.reason);
+      
+      setShowReturnModal(false);
+      setSelectedQR(null);
+      resetReturnForm();
+      loadQRCodes();
+      loadStats();
+      toast({
+        title: "Success",
+        description: "QR code returned successfully",
+      });
+    } catch (error) {
+      console.error('Failed to return QR code:', error);
+      const errorMessage = handleApiError(error, 'Failed to return QR code');
+      toast({
+        title: "Error",
+        description: errorMessage,
+        variant: "destructive",
+      });
+    } finally {
+      setReturning(false);
+    }
+  };
+
   const showQRDetails = (qr: QRCode) => {
     setSelectedQR(qr);
     setShowQRDetailsDialog(true);
@@ -637,6 +675,12 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
     });
   };
 
+  const resetReturnForm = () => {
+    setReturnForm({
+      reason: ''
+    });
+  };
+
   const openAssignModal = (qr: QRCode) => {
     setSelectedQR(qr);
     setAssignForm({
@@ -659,6 +703,14 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
       notes: ''
     });
     setShowIssueModal(true);
+  };
+
+  const openReturnModal = (qr: QRCode) => {
+    setSelectedQR(qr);
+    setReturnForm({
+      reason: ''
+    });
+    setShowReturnModal(true);
   };
 
   const resetGenerateForm = () => {
@@ -720,7 +772,7 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
       unallocated: QrCode,
       allocated: Building,
       issued: CheckCircle,
-      returned: AlertTriangle,
+      returned: RotateCcw,
       blocked: Trash2
     };
     
@@ -1673,6 +1725,78 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
         </div>
       )}
 
+      {/* Return QR Modal */}
+      {showReturnModal && selectedQR && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
+            <h2 className="text-xl font-bold text-gray-900 mb-4">
+              Return QR Code: {selectedQR.qrValue}
+            </h2>
+            <form onSubmit={handleReturnQR} className="space-y-4">
+              <div className="mb-4">
+                <Alert>
+                  <AlertTriangle className="h-4 w-4" />
+                  <AlertTitle>Important</AlertTitle>
+                  <AlertDescription>
+                    This QR code will be returned from the merchant and marked as allocated to the branch. 
+                    Please provide a clear reason for the return.
+                  </AlertDescription>
+                </Alert>
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Return Reason <span className="text-red-500">*</span>
+                </label>
+                <textarea
+                  value={returnForm.reason}
+                  onChange={(e) => setReturnForm({ ...returnForm, reason: e.target.value })}
+                  placeholder="Please provide a detailed reason for returning this QR code..."
+                  rows={4}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  required
+                  maxLength={500}
+                />
+                <div className="text-xs text-gray-500 mt-1">
+                  {returnForm.reason.length}/500 characters
+                </div>
+              </div>
+              
+              <div className="flex space-x-3 pt-4">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowReturnModal(false);
+                    setSelectedQR(null);
+                    resetReturnForm();
+                  }}
+                  className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={returning || !returnForm.reason.trim()}
+                  className="flex-1 px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 disabled:opacity-50 flex items-center justify-center"
+                >
+                  {returning ? (
+                    <>
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                      Processing...
+                    </>
+                  ) : (
+                    <>
+                      <RotateCcw className="h-4 w-4 mr-2" />
+                      Return QR Code
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* QR Details Alert Dialog */}
       <AlertDialog open={showQRDetailsDialog} onOpenChange={setShowQRDetailsDialog}>
         <AlertDialogContent className="max-w-lg">
@@ -1759,6 +1883,48 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
                           <div className="text-gray-900 col-span-2 bg-gray-50 p-2 rounded">{selectedQR.notes}</div>
                         </>
                       )}
+                      
+                      {selectedQR.blockedReason && (
+                        <>
+                          <div className="font-medium text-gray-700 col-span-2">Blocked Reason:</div>
+                          <div className="col-span-2">
+                            <Alert variant="destructive">
+                              <AlertTriangle className="h-4 w-4" />
+                              <AlertTitle>QR Code Blocked</AlertTitle>
+                              <AlertDescription>
+                                {selectedQR.blockedReason}
+                                {selectedQR.blockedAt && (
+                                  <div className="text-xs mt-1">
+                                    Blocked on: {new Date(selectedQR.blockedAt).toLocaleString()}
+                                    {selectedQR.blockedBy && ` by ${selectedQR.blockedBy}`}
+                                  </div>
+                                )}
+                              </AlertDescription>
+                            </Alert>
+                          </div>
+                        </>
+                      )}
+                      
+                      {selectedQR.returnedReason && (
+                        <>
+                          <div className="font-medium text-gray-700 col-span-2">Return Information:</div>
+                          <div className="col-span-2">
+                            <Alert>
+                              <RotateCcw className="h-4 w-4" />
+                              <AlertTitle>QR Code Returned</AlertTitle>
+                              <AlertDescription>
+                                <div className="font-medium">Reason: {selectedQR.returnedReason}</div>
+                                {selectedQR.returnedAt && (
+                                  <div className="text-xs mt-1">
+                                    Returned on: {new Date(selectedQR.returnedAt).toLocaleString()}
+                                    {selectedQR.returnedBy && ` by ${selectedQR.returnedBy}`}
+                                  </div>
+                                )}
+                              </AlertDescription>
+                            </Alert>
+                          </div>
+                        </>
+                      )}
                     </div>
                   </>
                 )}
@@ -1769,6 +1935,18 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
             <AlertDialogCancel onClick={() => setShowQRDetailsDialog(false)}>
               Close
             </AlertDialogCancel>
+            {selectedQR?.status === 'issued' && (
+              <AlertDialogAction 
+                onClick={() => {
+                  setShowQRDetailsDialog(false);
+                  openReturnModal(selectedQR);
+                }}
+                className="bg-orange-600 hover:bg-orange-700"
+              >
+                <RotateCcw className="h-4 w-4 mr-2" />
+                Return QR
+              </AlertDialogAction>
+            )}
             <AlertDialogAction 
               onClick={() => selectedQR && handlePrintQR(selectedQR)}
               className="bg-blue-600 hover:bg-blue-700"

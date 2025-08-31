@@ -31,13 +31,15 @@ export interface QRCodeResponseDto {
   blockedReason?: string;
   blockedAt?: string;
   blockedByUserName?: string;
+  returnedReason?: string;
+  returnedAt?: string;
+  returnedByUserName?: string;
   
   // Timestamps
   createdAt: string;
   updatedAt: string;
   allocatedAt?: string;
   issuedAt?: string;
-  returnedAt?: string;
   
   // Additional Information
   notes?: string;
@@ -93,6 +95,10 @@ export interface QRCodeBlockDto {
   reason: string;
 }
 
+export interface QRCodeReturnDto {
+  reason: string;
+}
+
 export interface PagedResponse<T> {
   content: T[];
   pageInfo: {
@@ -131,6 +137,9 @@ const transformQRCode = (backendQR: QRCodeResponseDto): QRCode => {
     blockedReason: backendQR.blockedReason,
     blockedAt: backendQR.blockedAt,
     blockedBy: backendQR.blockedByUserName,
+    returnedReason: backendQR.returnedReason,
+    returnedAt: backendQR.returnedAt,
+    returnedBy: backendQR.returnedByUserName,
     createdBy: 'system', // Default value since backend doesn't provide this
     createdAt: backendQR.createdAt,
     updatedAt: backendQR.updatedAt,
@@ -370,6 +379,27 @@ export class QRCodeApiService {
     } catch (error: any) {
       console.error('Failed to unblock QR code:', error);
       throw new Error(error.response?.data?.message || 'Failed to unblock QR code');
+    }
+  }
+
+  // Return QR code from merchant
+  async returnQRCode(qrCodeId: string | number, reason: string): Promise<QRCode> {
+    try {
+      const returnData: QRCodeReturnDto = { reason };
+
+      const response = await api.post<ApiResponse<QRCodeResponseDto>>(
+        `${this.basePath}/${qrCodeId}/return`,
+        returnData
+      );
+
+      if (response.data.success) {
+        return transformQRCode(response.data.data);
+      } else {
+        throw new Error(response.data.message);
+      }
+    } catch (error: any) {
+      console.error('Failed to return QR code:', error);
+      throw new Error(error.response?.data?.message || 'Failed to return QR code');
     }
   }
 

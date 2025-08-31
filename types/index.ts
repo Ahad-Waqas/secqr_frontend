@@ -42,6 +42,9 @@ export interface QRCode {
   blockedReason?: string;
   blockedAt?: string;
   blockedBy?: string;
+  returnedReason?: string;
+  returnedAt?: string;
+  returnedBy?: string;
   createdBy: string;
   createdAt: string;
   updatedAt: string;

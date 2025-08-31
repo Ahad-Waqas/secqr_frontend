@@ -26,8 +26,8 @@ const KYCManagement: React.FC<KYCManagementProps> = ({ user }) => {
   });
   const [reviewing, setReviewing] = useState(false);
 
-  const isBranchApprover = user.role === 'branch_approver';
-  const isAdmin = user.role === 'system_admin';
+  const isBranchApprover = user.role === 'BRANCH_APPROVER';
+  const isAdmin = user.role === 'SUPER_ADMIN';
 
   useEffect(() => {
     if (isBranchApprover || isAdmin) {
