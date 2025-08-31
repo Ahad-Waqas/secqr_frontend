@@ -5,7 +5,7 @@ import {
   Building, Store, Hash, Terminal, FileText, RotateCcw
 } from 'lucide-react';
 import { User, QRCode } from '../types';
-import { qrCodeApiService, QRCodeCreateDto, QRCodeUpdateDto, QRCodeStatsDto, QRCodeIssueDto, QRCodeReturnDto } from '../services/qr-api';
+import { qrCodeApiService, QRCodeCreateDto, QRCodeUpdateDto, QRCodeStatsDto, QRCodeIssueDto, QRCodeReturnDto, QRCodeValueUpdateDto } from '../services/qr-api';
 import { branchApiService, BranchResponseDto } from '../services/branch-api';
 import { toast } from "@/components/ui/use-toast";
 import {
@@ -51,8 +51,10 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
   const [showIssueModal, setShowIssueModal] = useState(false);
   const [showReturnModal, setShowReturnModal] = useState(false);
   const [showQRDetailsDialog, setShowQRDetailsDialog] = useState(false);
+  const [showBulkDeleteModal, setShowBulkDeleteModal] = useState(false);
   const [selectedQR, setSelectedQR] = useState<QRCode | null>(null);
-  const [filters, setFilters] = useState({ search: '', status: '', type: '' });
+  const [selectedQRIds, setSelectedQRIds] = useState<Set<string>>(new Set());
+  const [filters, setFilters] = useState({ search: '', status: '', type: '', branchId: '' });
   
   // Pagination state
   const [currentPage, setCurrentPage] = useState(0);
@@ -80,6 +82,7 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
   
   // Edit form state
   const [editForm, setEditForm] = useState({
+    qrValue: '',
     merchantId: '',
     terminalId: '',
     notes: '',
@@ -116,6 +119,9 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
   });
   const [returning, setReturning] = useState(false);
 
+  // Bulk delete state
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+
   const [branches, setBranches] = useState<BranchResponseDto[]>([]);
 
   const canManageQRs = user.role === 'SUPER_ADMIN';
@@ -144,12 +150,13 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
     try {
       let result;
       
-      if (filters.search || filters.status || filters.type) {
+      if (filters.search || filters.status || filters.type || filters.branchId) {
         // Use search API when filters are applied
         result = await qrCodeApiService.searchQRCodes(
           filters.search || undefined,
           filters.status || undefined,
           filters.type ? filters.type.toUpperCase() : undefined,
+          filters.branchId || undefined,
           currentPage,
           pageSize
         );
@@ -157,12 +164,15 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
       } else {
         // Use regular get all API
         result = await qrCodeApiService.getAllQRCodes(currentPage, pageSize);
-        console.log('Get all result:', result.qrCodes[1].returnedReason);
+        console.log('Get all result:', result.qrCodes);
       }
       
       setQrCodes(result.qrCodes);
       setTotalPages(result.pagination.totalPages);
       setTotalElements(result.pagination.totalElements);
+      
+      // Clear selection when loading new data
+      setSelectedQRIds(new Set());
     } catch (error) {
       console.error('Failed to load QR codes:', error);
       const errorMessage = handleApiError(error, 'Failed to load QR codes');
@@ -273,6 +283,11 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
     
     setUpdating(true);
     try {
+      // Check if QR value has changed and update it separately if needed
+      if (editForm.qrValue && editForm.qrValue !== selectedQR.qrValue) {
+        await qrCodeApiService.updateQRCodeValue(selectedQR.id, editForm.qrValue);
+      }
+
       // If branch is changed, allocate QR to new branch
       if (editForm.branchId && editForm.branchId !== selectedQR.allocatedBranchId?.toString()) {
         await qrCodeApiService.allocateQRsToBranch([selectedQR.id], Number(editForm.branchId));
@@ -681,6 +696,58 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
     });
   };
 
+  // Selection management functions
+  const handleSelectQR = (qrId: string) => {
+    const newSelected = new Set(selectedQRIds);
+    if (newSelected.has(qrId)) {
+      newSelected.delete(qrId);
+    } else {
+      newSelected.add(qrId);
+    }
+    setSelectedQRIds(newSelected);
+  };
+
+  const handleSelectAllQR = () => {
+    if (selectedQRIds.size === qrCodes.length && qrCodes.length > 0) {
+      setSelectedQRIds(new Set());
+    } else {
+      setSelectedQRIds(new Set(qrCodes.map(qr => qr.id)));
+    }
+  };
+
+  const clearSelection = () => {
+    setSelectedQRIds(new Set());
+  };
+
+  // Bulk delete function
+  const handleBulkDelete = async () => {
+    if (selectedQRIds.size === 0) return;
+    
+    setBulkDeleting(true);
+    try {
+      await qrCodeApiService.bulkDeleteQRCodes(Array.from(selectedQRIds));
+      
+      setShowBulkDeleteModal(false);
+      clearSelection();
+      loadQRCodes();
+      loadStats();
+      toast({
+        title: "Success",
+        description: `Successfully deleted ${selectedQRIds.size} QR codes`,
+      });
+    } catch (error) {
+      console.error('Failed to bulk delete QR codes:', error);
+      const errorMessage = handleApiError(error, 'Failed to delete QR codes');
+      toast({
+        title: "Error",
+        description: errorMessage,
+        variant: "destructive",
+      });
+    } finally {
+      setBulkDeleting(false);
+    }
+  };
+
   const openAssignModal = (qr: QRCode) => {
     setSelectedQR(qr);
     setAssignForm({
@@ -729,6 +796,7 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
 
   const resetEditForm = () => {
     setEditForm({
+      qrValue: '',
       merchantId: '',
       terminalId: '',
       notes: '',
@@ -742,6 +810,7 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
   const openEditModal = (qr: QRCode) => {
     setSelectedQR(qr);
     setEditForm({
+      qrValue: qr.qrValue || '',
       merchantId: qr.merchantId || '',
       terminalId: qr.terminalId || '',
       notes: qr.notes || '',
@@ -805,6 +874,26 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
           <p className="text-gray-600">Generate, upload, and manage QR codes</p>
         </div>
         <div className="flex items-center space-x-3">
+          {selectedQRIds.size > 0 && (
+            <div className="flex items-center space-x-2 bg-gray-100 px-3 py-2 rounded-lg">
+              <span className="text-sm text-gray-700">
+                {selectedQRIds.size} selected
+              </span>
+              <button
+                onClick={() => setShowBulkDeleteModal(true)}
+                className="flex items-center space-x-1 px-2 py-1 bg-red-600 text-white rounded text-sm hover:bg-red-700"
+              >
+                <Trash2 className="h-3 w-3" />
+                <span>Delete</span>
+              </button>
+              <button
+                onClick={clearSelection}
+                className="flex items-center space-x-1 px-2 py-1 bg-gray-600 text-white rounded text-sm hover:bg-gray-700"
+              >
+                <span>Clear</span>
+              </button>
+            </div>
+          )}
           <button
             onClick={() => setShowUploadModal(true)}
             className="flex items-center space-x-2 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
@@ -911,8 +1000,69 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
             <option value="static">Static</option>
             <option value="dynamic">Dynamic</option>
           </select>
+          
+          {/* Branch filter - only for admin roles */}
+          {(user.role === 'SUPER_ADMIN' || user.role === 'ADMIN') && (
+            <select
+              value={filters.branchId}
+              onChange={(e) => handleFilterChange('branchId', e.target.value)}
+              className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            >
+              <option value="">All Branches</option>
+              {branches.map((branch) => (
+                <option key={branch.id} value={branch.id}>
+                  {branch.name} ({branch.branchCode})
+                </option>
+              ))}
+            </select>
+          )}
         </div>
       </div>
+
+      {/* Bulk Actions */}
+      {selectedQRIds.size > 0 && (
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-2">
+              <CheckCircle className="h-5 w-5 text-blue-600" />
+              <span className="text-sm font-medium text-blue-900">
+                {selectedQRIds.size} QR code{selectedQRIds.size !== 1 ? 's' : ''} selected
+              </span>
+            </div>
+            <div className="flex items-center space-x-2">
+              <button
+                onClick={() => setShowBulkDeleteModal(true)}
+                className="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
+              >
+                <Trash2 className="h-4 w-4 mr-1" />
+                Delete Selected
+              </button>
+              <button
+                onClick={clearSelection}
+                className="inline-flex items-center px-3 py-2 border border-gray-300 text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+              >
+                Clear Selection
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Branch Selection Disclaimer */}
+      {(user.role === 'SUPER_ADMIN' || user.role === 'ADMIN') && !filters.branchId && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+          <div className="flex items-center space-x-2">
+            <AlertTriangle className="h-5 w-5 text-amber-600" />
+            <div>
+              <h3 className="text-sm font-medium text-amber-800">Select a Branch</h3>
+              <p className="text-sm text-amber-700">
+                Please select a branch from the filter above to view its QR codes. Without a branch selection, 
+                you'll see only unassigned QR codes.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* QR Codes Table */}
       <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
@@ -926,6 +1076,14 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
               <table className="min-w-full divide-y divide-gray-200">
                 <thead className="bg-gray-50">
                   <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <input
+                        type="checkbox"
+                        checked={qrCodes.length > 0 && selectedQRIds.size === qrCodes.length}
+                        onChange={handleSelectAllQR}
+                        className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                      />
+                    </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       QR Code
                     </th>
@@ -951,8 +1109,17 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
                   {qrCodes.map((qr) => (
-                    <tr key={qr.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => showQRDetails(qr)}>
+                    <tr key={qr.id} className="hover:bg-gray-50">
                       <td className="px-6 py-4 whitespace-nowrap">
+                        <input
+                          type="checkbox"
+                          checked={selectedQRIds.has(qr.id)}
+                          onChange={() => handleSelectQR(qr.id)}
+                          className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap cursor-pointer" onClick={() => showQRDetails(qr)}>
                         <div className="flex items-center">
                           <QrCode className="h-5 w-5 text-gray-400 mr-3" />
                           <div>
@@ -961,7 +1128,7 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
                           </div>
                         </div>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
+                      <td className="px-6 py-4 whitespace-nowrap cursor-pointer" onClick={() => showQRDetails(qr)}>
                         <div className="text-sm text-gray-900">
                           {qr.bankName && (
                             <div className="flex items-center space-x-1 mb-1">
@@ -989,16 +1156,16 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
                           )}
                         </div>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
+                      <td className="px-6 py-4 whitespace-nowrap cursor-pointer" onClick={() => showQRDetails(qr)}>
                         <span className="text-sm text-gray-900 capitalize">{qr.qrType}</span>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
+                      <td className="px-6 py-4 whitespace-nowrap cursor-pointer" onClick={() => showQRDetails(qr)}>
                         {getStatusBadge(qr.status)}
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 cursor-pointer" onClick={() => showQRDetails(qr)}>
                         {qr.allocatedBranchId || 'N/A'}
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 cursor-pointer" onClick={() => showQRDetails(qr)}>
                         {new Date(qr.createdAt).toLocaleDateString()}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
@@ -1386,6 +1553,24 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
               Edit QR Code: {selectedQR.qrValue}
             </h2>
             <form onSubmit={handleUpdateQR} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  QR Value <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={editForm.qrValue}
+                  onChange={(e) => setEditForm({ ...editForm, qrValue: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  required
+                  maxLength={100}
+                  placeholder="Enter QR code value"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Unique identifier for this QR code (max 100 characters)
+                </p>
+              </div>
+
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Bank Name
@@ -1793,6 +1978,72 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Delete Confirmation Modal */}
+      {showBulkDeleteModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl p-6 w-full max-w-md">
+            <h2 className="text-xl font-bold text-gray-900 mb-4 flex items-center">
+              <AlertTriangle className="h-6 w-6 text-red-600 mr-2" />
+              Confirm Bulk Delete
+            </h2>
+            
+            <div className="mb-6">
+              <Alert variant="destructive">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertTitle>Warning</AlertTitle>
+                <AlertDescription>
+                  You are about to permanently delete <strong>{selectedQRIds.size}</strong> QR code{selectedQRIds.size > 1 ? 's' : ''}. 
+                  This action cannot be undone.
+                </AlertDescription>
+              </Alert>
+            </div>
+
+            <div className="mb-4">
+              <h3 className="text-sm font-medium text-gray-700 mb-2">
+                Selected QR Codes ({selectedQRIds.size}):
+              </h3>
+              <div className="max-h-32 overflow-y-auto bg-gray-50 rounded p-2">
+                {Array.from(selectedQRIds).map(qrId => {
+                  const qr = qrCodes.find(q => q.id === qrId);
+                  return qr ? (
+                    <div key={qrId} className="text-xs text-gray-600 py-1">
+                      {qr.qrValue} - {qr.status}
+                    </div>
+                  ) : null;
+                })}
+              </div>
+            </div>
+            
+            <div className="flex space-x-3">
+              <button
+                type="button"
+                onClick={() => setShowBulkDeleteModal(false)}
+                className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleBulkDelete}
+                disabled={bulkDeleting}
+                className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 flex items-center justify-center"
+              >
+                {bulkDeleting ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                    Deleting...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="h-4 w-4 mr-2" />
+                    Delete {selectedQRIds.size} QR{selectedQRIds.size > 1 ? 's' : ''}
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}

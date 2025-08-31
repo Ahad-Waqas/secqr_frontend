@@ -99,6 +99,14 @@ export interface QRCodeReturnDto {
   reason: string;
 }
 
+export interface QRCodeValueUpdateDto {
+  qrValue: string;
+}
+
+export interface QRCodeBulkDeleteDto {
+  qrCodeIds: number[];
+}
+
 export interface PagedResponse<T> {
   content: T[];
   pageInfo: {
@@ -184,6 +192,7 @@ export class QRCodeApiService {
     searchTerm?: string,
     status?: string,
     type?: string,
+    branchId?: string | number,
     page: number = 0,
     size: number = 20,
     sortBy: string = 'createdAt',
@@ -194,6 +203,7 @@ export class QRCodeApiService {
       if (searchTerm) params.q = searchTerm;
       if (status) params.status = status;
       if (type) params.type = type;
+      if (branchId) params.branchId = branchId;
 
       const response = await api.get<ApiResponse<PagedResponse<QRCodeResponseDto>>>(
         `${this.basePath}/search`,
@@ -295,6 +305,27 @@ export class QRCodeApiService {
     } catch (error: any) {
       console.error('Failed to update QR code:', error);
       throw new Error(error.response?.data?.message || 'Failed to update QR code');
+    }
+  }
+
+  // Update QR code value specifically
+  async updateQRCodeValue(qrCodeId: string | number, qrValue: string): Promise<QRCode> {
+    try {
+      const updateData: QRCodeValueUpdateDto = { qrValue };
+
+      const response = await api.post<ApiResponse<QRCodeResponseDto>>(
+        `${this.basePath}/${qrCodeId}/update-qr-value`,
+        updateData
+      );
+
+      if (response.data.success) {
+        return transformQRCode(response.data.data);
+      } else {
+        throw new Error(response.data.message);
+      }
+    } catch (error: any) {
+      console.error('Failed to update QR code value:', error);
+      throw new Error(error.response?.data?.message || 'Failed to update QR code value');
     }
   }
 
@@ -400,6 +431,27 @@ export class QRCodeApiService {
     } catch (error: any) {
       console.error('Failed to return QR code:', error);
       throw new Error(error.response?.data?.message || 'Failed to return QR code');
+    }
+  }
+
+  // Bulk delete QR codes
+  async bulkDeleteQRCodes(qrCodeIds: (string | number)[]): Promise<void> {
+    try {
+      const bulkDeleteData: QRCodeBulkDeleteDto = {
+        qrCodeIds: qrCodeIds.map(id => Number(id))
+      };
+
+      const response = await api.post<ApiResponse<void>>(
+        `${this.basePath}/bulk-delete`,
+        bulkDeleteData
+      );
+
+      if (!response.data.success) {
+        throw new Error(response.data.message);
+      }
+    } catch (error: any) {
+      console.error('Failed to bulk delete QR codes:', error);
+      throw new Error(error.response?.data?.message || 'Failed to bulk delete QR codes');
     }
   }
 

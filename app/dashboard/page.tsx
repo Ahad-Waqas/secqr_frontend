@@ -131,7 +131,7 @@ export default function DashboardPage() {
         { id: 'qr-management', name: 'QR Management', icon: QrCode },
         { id: 'inventory', name: 'Inventory Management', icon: Package },
         { id: 'requests', name: 'Request Management', icon: FileText },
-        { id: 'sales', name: 'Sales Management', icon: Store },
+        // { id: 'sales', name: 'Sales Management', icon: Store },
         { id: 'branches', name: 'Branch Management', icon: Building },
         { id: 'users', name: 'User Management', icon: Users },
         { id: 'reports', name: 'Reports', icon: BarChart3 },
@@ -142,6 +142,7 @@ export default function DashboardPage() {
     if (currentUser?.role === 'BRANCH_MANAGER') {
       return [
         ...baseItems,
+        { id: 'qr-management', name: 'QR Management', icon: QrCode },
         { id: 'inventory', name: 'Inventory', icon: Package },
         { id: 'requests', name: 'Request Management', icon: FileText },
         { id: 'sales', name: 'Sales Management', icon: Store },
@@ -163,7 +164,10 @@ export default function DashboardPage() {
       return [
         ...baseItems,
         { id: 'requests', name: 'My Requests', icon: FileText },
-        { id: 'merchants', name: 'Merchants', icon: Store }
+        { id: 'merchants', name: 'Merchants', icon: Store },
+        // { id: 'qr-management', name: 'QR Management', icon: QrCode },
+        { id: 'sales', name: 'Sales Management', icon: Store },
+
       ];
     }
 
