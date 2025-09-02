@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Store, QrCode, User as UserIcon, Phone, Mail, MapPin,
-  Plus, Search, Filter, CheckCircle, Clock, AlertTriangle, RotateCcw
+  Plus, Search, Filter, CheckCircle, Clock, AlertTriangle, RotateCcw, Building,
+  ChevronLeft, ChevronRight
 } from 'lucide-react';
 import { User, QRCode, Merchant } from '../types';
-import { apiService } from '../services/api';
-import { mockMerchants } from '../services/mockData';
+import { qrCodeApiService, QRCodeIssueDto } from '../services/qr-api';
+import { branchApiService, BranchResponseDto } from '../services/branch-api';
+import { useToast } from '../hooks/use-toast';
 
 interface SalesManagementProps {
   user: User;
@@ -13,58 +15,93 @@ interface SalesManagementProps {
 
 const SalesManagement: React.FC<SalesManagementProps> = ({ user }) => {
   const [allocatedQRs, setAllocatedQRs] = useState<QRCode[]>([]);
-  const [merchants, setMerchants] = useState<Merchant[]>(mockMerchants);
+  const [branches, setBranches] = useState<BranchResponseDto[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'allocated' | 'issued' | 'returns'>('allocated');
   const [showIssueModal, setShowIssueModal] = useState(false);
   const [showReturnModal, setShowReturnModal] = useState(false);
   const [selectedQR, setSelectedQR] = useState<QRCode | null>(null);
+  const { toast } = useToast();
+  
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(0);
+  const [pageSize, setPageSize] = useState(20);
+  const [totalPages, setTotalPages] = useState(0);
+  const [totalElements, setTotalElements] = useState(0);
   
   // Issue form state
   const [issueForm, setIssueForm] = useState({
     merchantId: '',
-    newMerchant: {
-      legalName: '',
-      shopName: '',
-      address: '',
-      phone: '',
-      email: ''
-    },
-    useExistingMerchant: true
+    merchantName: '',
+    notes: ''
   });
   const [issuing, setIssuing] = useState(false);
   
   // Return form state
   const [returnForm, setReturnForm] = useState({
-    reason: '',
-    condition: '',
-    notes: ''
+    reason: ''
   });
   const [returning, setReturning] = useState(false);
 
-  const canIssueQRs = user.role === 'sales_user' || user.role === 'branch_manager';
+  const canIssueQRs = user.role === 'SALES_USER' || user.role === 'BRANCH_MANAGER';
 
   useEffect(() => {
     loadAllocatedQRs();
-  }, [activeTab]);
+    loadBranches();
+  }, [activeTab, currentPage, pageSize]);
+
+  const loadBranches = async () => {
+    try {
+      const data = await branchApiService.getBranches();
+      setBranches(data);
+    } catch (error) {
+      console.error('Failed to load branches:', error);
+      toast({
+        title: "Error",
+        description: "Failed to load branches",
+        variant: "destructive",
+      });
+    }
+  };
 
   const loadAllocatedQRs = async () => {
     setLoading(true);
     try {
-      const statusFilter = {
-        allocated: 'allocated',
-        issued: 'issued', 
-        returns: 'returned'
-      };
+      let result;
       
-      // For sales users, the API will automatically filter to their QRs
-      const data = await apiService.getQRCodes({ 
-        status: statusFilter[activeTab],
-        branchId: user.branchId 
-      });
-      setAllocatedQRs(data);
+      switch (activeTab) {
+        case 'allocated':
+          result = await qrCodeApiService.getAllocatedQRCodes(currentPage, pageSize);
+          break;
+        case 'issued':
+          result = await qrCodeApiService.getIssuedQRCodes(currentPage, pageSize);
+          break;
+        case 'returns':
+          result = await qrCodeApiService.searchQRCodes(undefined, 'RETURNED', undefined, undefined, currentPage, pageSize);
+          break;
+        default:
+          result = await qrCodeApiService.getAllocatedQRCodes(currentPage, pageSize);
+      }
+      
+      // Filter by user's branch if they're not a super admin
+      let qrCodes = result.qrCodes;
+      if (user.role !== 'SUPER_ADMIN' && user.branchId) {
+        qrCodes = qrCodes.filter(qr => 
+          qr.allocatedBranchId === user.branchId || 
+          qr.allocatedBranchId === user.branchId?.toString()
+        );
+      }
+      
+      setAllocatedQRs(qrCodes);
+      setTotalPages(result.pagination?.totalPages || 0);
+      setTotalElements(result.pagination?.totalElements || qrCodes.length);
     } catch (error) {
       console.error('Failed to load QRs:', error);
+      toast({
+        title: "Error",
+        description: "Failed to load QR codes",
+        variant: "destructive",
+      });
     } finally {
       setLoading(false);
     }
@@ -74,40 +111,33 @@ const SalesManagement: React.FC<SalesManagementProps> = ({ user }) => {
     e.preventDefault();
     if (!selectedQR) return;
     
-    let merchantData;
-    
-    if (issueForm.useExistingMerchant) {
-      merchantData = merchants.find(m => m.id === issueForm.merchantId);
-      if (merchantData && merchantData.kycStatus !== 'verified') {
-        alert(`Cannot issue QR to merchant with KYC status: ${merchantData.kycStatus}. KYC must be verified first.`);
-        return;
-      }
-    }
-    
     setIssuing(true);
     try {
-      if (issueForm.useExistingMerchant) {
-        // merchantData already found above
-      } else {
-        // Create new merchant
-        merchantData = {
-          id: `merchant_new_${Date.now()}`,
-          ...issueForm.newMerchant,
-          kycStatus: 'verified' as const, // New merchants start as verified for demo
-          createdAt: new Date().toISOString()
-        };
-        merchants.push(merchantData);
-      }
+      const issueData: QRCodeIssueDto = {
+        qrCodeId: Number(selectedQR.id),
+        merchantId: issueForm.merchantId,
+        merchantName: issueForm.merchantName,
+        notes: issueForm.notes || undefined
+      };
+
+      await qrCodeApiService.issueQRToMerchant(issueData);
       
-      if (merchantData) {
-        await apiService.issueQRToMerchant(selectedQR.id, merchantData);
-        setShowIssueModal(false);
-        setSelectedQR(null);
-        resetIssueForm();
-        loadAllocatedQRs();
-      }
+      setShowIssueModal(false);
+      setSelectedQR(null);
+      resetIssueForm();
+      setCurrentPage(0);
+      loadAllocatedQRs();
+      toast({
+        title: "Success",
+        description: "QR code issued to merchant successfully",
+      });
     } catch (error) {
       console.error('Failed to issue QR:', error);
+      toast({
+        title: "Error",
+        description: "Failed to issue QR code",
+        variant: "destructive",
+      });
     } finally {
       setIssuing(false);
     }
@@ -119,23 +149,36 @@ const SalesManagement: React.FC<SalesManagementProps> = ({ user }) => {
     
     setReturning(true);
     try {
-      await apiService.returnQR(selectedQR.id, returnForm.reason, returnForm.condition);
+      await qrCodeApiService.returnQRCode(selectedQR.id, returnForm.reason);
       setShowReturnModal(false);
       setSelectedQR(null);
-      setReturnForm({ reason: '', condition: '', notes: '' });
+      setReturnForm({ reason: '' });
+      setCurrentPage(0);
       loadAllocatedQRs();
+      toast({
+        title: "Success",
+        description: "QR code returned successfully",
+      });
     } catch (error) {
       console.error('Failed to return QR:', error);
+      toast({
+        title: "Error",
+        description: "Failed to return QR code",
+        variant: "destructive",
+      });
     } finally {
       setReturning(false);
     }
   };
 
   const handlePrintQR = (qr: QRCode) => {
-    const merchant = qr.issuedToMerchantId ? getMerchantInfo(qr.issuedToMerchantId) : null;
-    
-    if (!merchant || merchant.kycStatus !== 'verified') {
-      alert('Cannot print QR code. Merchant KYC must be verified first.');
+    // For issued QRs, we can print them directly
+    if (qr.status !== 'issued') {
+      toast({
+        title: "Warning",
+        description: "Only issued QR codes can be printed",
+        variant: "destructive",
+      });
       return;
     }
     
@@ -146,7 +189,7 @@ const SalesManagement: React.FC<SalesManagementProps> = ({ user }) => {
       <!DOCTYPE html>
       <html>
         <head>
-          <title>QR Code - ${merchant.shopName}</title>
+          <title>QR Code - ${qr.merchantName || qr.qrValue}</title>
           <style>
             body { 
               font-family: Arial, sans-serif; 
@@ -197,7 +240,7 @@ const SalesManagement: React.FC<SalesManagementProps> = ({ user }) => {
             .value { 
               color: #666; 
             }
-            .kyc-verified {
+            .status-issued {
               color: #10B981;
               font-weight: bold;
             }
@@ -222,7 +265,7 @@ const SalesManagement: React.FC<SalesManagementProps> = ({ user }) => {
           <div class="qr-container">
             <div class="header">
               <h1>QR Code</h1>
-              <h2>${merchant.shopName}</h2>
+              <h2>${qr.merchantName || qr.bankName || 'Demo Bank Ltd.'}</h2>
             </div>
             
             <div class="qr-code">
@@ -231,29 +274,41 @@ const SalesManagement: React.FC<SalesManagementProps> = ({ user }) => {
             
             <div class="details">
               <div class="detail-row">
+                <span class="label">QR Value:</span>
+                <span class="value">${qr.qrValue}</span>
+              </div>
+              <div class="detail-row">
+                <span class="label">Type:</span>
+                <span class="value">${qr.qrType.toUpperCase()}</span>
+              </div>
+              <div class="detail-row">
+                <span class="label">Status:</span>
+                <span class="value status-issued">ISSUED ✓</span>
+              </div>
+              ${qr.merchantName ? `
+              <div class="detail-row">
                 <span class="label">Merchant:</span>
-                <span class="value">${merchant.shopName}</span>
+                <span class="value">${qr.merchantName}</span>
               </div>
+              ` : ''}
+              ${qr.merchantId ? `
               <div class="detail-row">
-                <span class="label">Legal Name:</span>
-                <span class="value">${merchant.legalName}</span>
+                <span class="label">Merchant ID:</span>
+                <span class="value">${qr.merchantId}</span>
               </div>
+              ` : ''}
+              ${qr.terminalId ? `
               <div class="detail-row">
-                <span class="label">KYC Status:</span>
-                <span class="value kyc-verified">VERIFIED ✓</span>
+                <span class="label">Terminal ID:</span>
+                <span class="value">${qr.terminalId}</span>
               </div>
+              ` : ''}
+              ${qr.bankName ? `
               <div class="detail-row">
-                <span class="label">Address:</span>
-                <span class="value">${merchant.address}</span>
+                <span class="label">Bank:</span>
+                <span class="value">${qr.bankName}</span>
               </div>
-              <div class="detail-row">
-                <span class="label">Phone:</span>
-                <span class="value">${merchant.phone}</span>
-              </div>
-              <div class="detail-row">
-                <span class="label">Email:</span>
-                <span class="value">${merchant.email}</span>
-              </div>
+              ` : ''}
               <div class="detail-row">
                 <span class="label">Generated:</span>
                 <span class="value">${new Date().toLocaleDateString()}</span>
@@ -280,14 +335,8 @@ const SalesManagement: React.FC<SalesManagementProps> = ({ user }) => {
   const resetIssueForm = () => {
     setIssueForm({
       merchantId: '',
-      newMerchant: {
-        legalName: '',
-        shopName: '',
-        address: '',
-        phone: '',
-        email: ''
-      },
-      useExistingMerchant: true
+      merchantName: '',
+      notes: ''
     });
   };
 
@@ -299,7 +348,7 @@ const SalesManagement: React.FC<SalesManagementProps> = ({ user }) => {
     };
     
     const icons = {
-      allocated: Clock,
+      allocated: Building,
       issued: CheckCircle,
       returned: RotateCcw
     };
@@ -314,8 +363,15 @@ const SalesManagement: React.FC<SalesManagementProps> = ({ user }) => {
     );
   };
 
-  const getMerchantInfo = (merchantId: string) => {
-    return merchants.find(m => m.id === merchantId);
+  const getBranchName = (branchId: string | undefined) => {
+    if (!branchId) return 'Not Assigned';
+    const branch = branches.find(b => b.id.toString() === branchId);
+    return branch ? branch.name : `Branch ${branchId}`;
+  };
+
+  const handleTabChange = (newTab: 'allocated' | 'issued' | 'returns') => {
+    setActiveTab(newTab);
+    setCurrentPage(0);
   };
 
   return (
@@ -380,7 +436,7 @@ const SalesManagement: React.FC<SalesManagementProps> = ({ user }) => {
               return (
                 <button
                   key={tab.id}
-                  onClick={() => setActiveTab(tab.id as any)}
+                  onClick={() => handleTabChange(tab.id as any)}
                   className={`flex items-center space-x-2 py-4 px-1 border-b-2 font-medium text-sm ${
                     activeTab === tab.id
                       ? 'border-blue-500 text-blue-600'
@@ -417,8 +473,6 @@ const SalesManagement: React.FC<SalesManagementProps> = ({ user }) => {
           ) : (
             <div className="space-y-4">
               {allocatedQRs.map((qr) => {
-                const merchant = qr.issuedToMerchantId ? getMerchantInfo(qr.issuedToMerchantId) : null;
-                
                 return (
                   <div key={qr.id} className="border border-gray-200 rounded-lg p-6">
                     <div className="flex items-start justify-between">
@@ -436,40 +490,45 @@ const SalesManagement: React.FC<SalesManagementProps> = ({ user }) => {
                           {getStatusBadge(qr.status)}
                         </div>
                         
-                        {merchant && (
-                          <div className="bg-gray-50 rounded-lg p-4 mt-4">
-                            <div className="flex items-start space-x-3">
-                              <Store className="h-5 w-5 text-gray-500 mt-0.5" />
-                              <div className="flex-1">
-                                <div className="flex items-center justify-between mb-2">
-                                  <h4 className="font-medium text-gray-900">{merchant.shopName}</h4>
-                                  <span className={`px-2 py-1 text-xs font-medium rounded-full ${
-                                    merchant.kycStatus === 'verified' ? 'bg-emerald-100 text-emerald-700' :
-                                    merchant.kycStatus === 'pending' ? 'bg-yellow-100 text-yellow-700' :
-                                    'bg-red-100 text-red-700'
-                                  }`}>
-                                    KYC {merchant.kycStatus}
-                                  </span>
-                                </div>
-                                <p className="text-sm text-gray-600 mb-1">{merchant.legalName}</p>
-                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs text-gray-500">
-                                  <div className="flex items-center space-x-1">
-                                    <MapPin className="h-3 w-3" />
-                                    <span className="truncate">{merchant.address}</span>
-                                  </div>
-                                  <div className="flex items-center space-x-1">
-                                    <Phone className="h-3 w-3" />
-                                    <span>{merchant.phone}</span>
-                                  </div>
-                                  <div className="flex items-center space-x-1">
-                                    <Mail className="h-3 w-3" />
-                                    <span className="truncate">{merchant.email}</span>
-                                  </div>
-                                </div>
-                              </div>
+                        {/* QR Details */}
+                        <div className="bg-gray-50 rounded-lg p-4 mt-4">
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                            <div>
+                              <span className="font-medium text-gray-700">Branch:</span>
+                              <span className="ml-2 text-gray-600">{getBranchName(qr.allocatedBranchId)}</span>
                             </div>
+                            {qr.merchantName && (
+                              <div>
+                                <span className="font-medium text-gray-700">Merchant:</span>
+                                <span className="ml-2 text-gray-600">{qr.merchantName}</span>
+                              </div>
+                            )}
+                            {qr.merchantId && (
+                              <div>
+                                <span className="font-medium text-gray-700">Merchant ID:</span>
+                                <span className="ml-2 text-gray-600">{qr.merchantId}</span>
+                              </div>
+                            )}
+                            {qr.terminalId && (
+                              <div>
+                                <span className="font-medium text-gray-700">Terminal ID:</span>
+                                <span className="ml-2 text-gray-600">{qr.terminalId}</span>
+                              </div>
+                            )}
+                            {qr.bankName && (
+                              <div>
+                                <span className="font-medium text-gray-700">Bank:</span>
+                                <span className="ml-2 text-gray-600">{qr.bankName}</span>
+                              </div>
+                            )}
+                            {qr.notes && (
+                              <div className="md:col-span-3">
+                                <span className="font-medium text-gray-700">Notes:</span>
+                                <span className="ml-2 text-gray-600">{qr.notes}</span>
+                              </div>
+                            )}
                           </div>
-                        )}
+                        </div>
                       </div>
                       
                       <div className="ml-6 flex flex-col space-y-2">
@@ -487,18 +546,12 @@ const SalesManagement: React.FC<SalesManagementProps> = ({ user }) => {
                         
                         {activeTab === 'issued' && canIssueQRs && (
                           <>
-                            {merchant.kycStatus === 'verified' ? (
-                              <button
-                                onClick={() => handlePrintQR(qr)}
-                                className="px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm mr-2"
-                              >
-                                Print QR
-                              </button>
-                            ) : (
-                              <div className="px-3 py-2 bg-gray-100 text-gray-500 rounded-lg text-sm mr-2 cursor-not-allowed">
-                                Print Disabled (KYC {merchant.kycStatus})
-                              </div>
-                            )}
+                            <button
+                              onClick={() => handlePrintQR(qr)}
+                              className="px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm"
+                            >
+                              Print QR
+                            </button>
                             <button
                               onClick={() => {
                                 setSelectedQR(qr);
@@ -518,6 +571,34 @@ const SalesManagement: React.FC<SalesManagementProps> = ({ user }) => {
             </div>
           )}
         </div>
+        
+        {/* Pagination */}
+        {!loading && totalPages > 1 && (
+          <div className="flex items-center justify-between px-6 py-4 border-t border-gray-200">
+            <div className="text-sm text-gray-700">
+              Showing {currentPage * pageSize + 1} to {Math.min((currentPage + 1) * pageSize, totalElements)} of {totalElements} results
+            </div>
+            <div className="flex items-center space-x-2">
+              <button
+                onClick={() => setCurrentPage(Math.max(0, currentPage - 1))}
+                disabled={currentPage === 0}
+                className="p-2 rounded-lg border border-gray-300 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </button>
+              <span className="text-sm text-gray-700">
+                Page {currentPage + 1} of {totalPages}
+              </span>
+              <button
+                onClick={() => setCurrentPage(Math.min(totalPages - 1, currentPage + 1))}
+                disabled={currentPage === totalPages - 1}
+                className="p-2 rounded-lg border border-gray-300 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Issue QR Modal */}
@@ -529,137 +610,46 @@ const SalesManagement: React.FC<SalesManagementProps> = ({ user }) => {
             </h2>
             
             <form onSubmit={handleIssueQR} className="space-y-4">
-              {/* Merchant Selection */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Merchant Selection
+                  Merchant ID *
                 </label>
-                <div className="space-y-3">
-                  <label className="flex items-center">
-                    <input
-                      type="radio"
-                      checked={issueForm.useExistingMerchant}
-                      onChange={() => setIssueForm({ ...issueForm, useExistingMerchant: true })}
-                      className="mr-2"
-                    />
-                    <span>Existing Merchant</span>
-                  </label>
-                  <label className="flex items-center">
-                    <input
-                      type="radio"
-                      checked={!issueForm.useExistingMerchant}
-                      onChange={() => setIssueForm({ ...issueForm, useExistingMerchant: false })}
-                      className="mr-2"
-                    />
-                    <span>New Merchant</span>
-                  </label>
-                </div>
+                <input
+                  type="text"
+                  value={issueForm.merchantId}
+                  onChange={(e) => setIssueForm({ ...issueForm, merchantId: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  placeholder="Enter merchant ID"
+                  required
+                />
               </div>
-
-              {issueForm.useExistingMerchant ? (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Select Merchant
-                  </label>
-                  <select
-                    value={issueForm.merchantId}
-                    onChange={(e) => setIssueForm({ ...issueForm, merchantId: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    required
-                  >
-                    <option value="">Choose a merchant...</option>
-                    {merchants.map(merchant => (
-                      <option key={merchant.id} value={merchant.id}>
-                        {merchant.shopName} - {merchant.legalName}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Legal Name
-                    </label>
-                    <input
-                      type="text"
-                      value={issueForm.newMerchant.legalName}
-                      onChange={(e) => setIssueForm({
-                        ...issueForm,
-                        newMerchant: { ...issueForm.newMerchant, legalName: e.target.value }
-                      })}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      required
-                    />
-                  </div>
-                  
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Shop Name
-                    </label>
-                    <input
-                      type="text"
-                      value={issueForm.newMerchant.shopName}
-                      onChange={(e) => setIssueForm({
-                        ...issueForm,
-                        newMerchant: { ...issueForm.newMerchant, shopName: e.target.value }
-                      })}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      required
-                    />
-                  </div>
-                  
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Address
-                    </label>
-                    <textarea
-                      value={issueForm.newMerchant.address}
-                      onChange={(e) => setIssueForm({
-                        ...issueForm,
-                        newMerchant: { ...issueForm.newMerchant, address: e.target.value }
-                      })}
-                      rows={2}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      required
-                    />
-                  </div>
-                  
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        Phone
-                      </label>
-                      <input
-                        type="tel"
-                        value={issueForm.newMerchant.phone}
-                        onChange={(e) => setIssueForm({
-                          ...issueForm,
-                          newMerchant: { ...issueForm.newMerchant, phone: e.target.value }
-                        })}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                        required
-                      />
-                    </div>
-                    
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        Email
-                      </label>
-                      <input
-                        type="email"
-                        value={issueForm.newMerchant.email}
-                        onChange={(e) => setIssueForm({
-                          ...issueForm,
-                          newMerchant: { ...issueForm.newMerchant, email: e.target.value }
-                        })}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                        required
-                      />
-                    </div>
-                  </div>
-                </div>
-              )}
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Merchant Name *
+                </label>
+                <input
+                  type="text"
+                  value={issueForm.merchantName}
+                  onChange={(e) => setIssueForm({ ...issueForm, merchantName: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  placeholder="Enter merchant name"
+                  required
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Notes
+                </label>
+                <textarea
+                  value={issueForm.notes}
+                  onChange={(e) => setIssueForm({ ...issueForm, notes: e.target.value })}
+                  rows={3}
+                  placeholder="Any additional notes about this issuance..."
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
               
               <div className="flex space-x-3 pt-4">
                 <button
@@ -696,7 +686,7 @@ const SalesManagement: React.FC<SalesManagementProps> = ({ user }) => {
             <form onSubmit={handleReturnQR} className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Return Reason
+                  Return Reason *
                 </label>
                 <select
                   value={returnForm.reason}
@@ -711,37 +701,6 @@ const SalesManagement: React.FC<SalesManagementProps> = ({ user }) => {
                   <option value="compliance_issue">Compliance Issue</option>
                   <option value="other">Other</option>
                 </select>
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  QR Code Condition
-                </label>
-                <select
-                  value={returnForm.condition}
-                  onChange={(e) => setReturnForm({ ...returnForm, condition: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  required
-                >
-                  <option value="">Select condition...</option>
-                  <option value="good">Good Condition</option>
-                  <option value="damaged">Damaged</option>
-                  <option value="lost">Lost/Missing</option>
-                  <option value="destroyed">Destroyed</option>
-                </select>
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Additional Notes
-                </label>
-                <textarea
-                  value={returnForm.notes}
-                  onChange={(e) => setReturnForm({ ...returnForm, notes: e.target.value })}
-                  rows={3}
-                  placeholder="Any additional details about the return..."
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
               </div>
               
               <div className="flex space-x-3 pt-4">

@@ -164,7 +164,25 @@ export interface RequestApprovalDto {
   approvedAmount?: number;
   rejectionReason?: string;
 }
-
+export interface Campaign {
+  id: string;
+  name: string;
+  description: string;
+  sector: 'RETAIL' | 'HOTEL' | 'EDUCATIONAL' | 'CLOTHING' | 'FOOD_BEVERAGE' | 'HEALTHCARE' | 'AUTOMOTIVE' | 'SERVICES' | 'OTHER';
+  status: 'ACTIVE' | 'INACTIVE' | 'COMPLETED' | 'DRAFT' | 'CANCELLED';
+  startDate: string;
+  endDate?: string;
+  targetQRCount: number;
+  allocatedQRCount: number;
+  issuedQRCount: number;
+  targetBranches: string[];
+  notes?: string;
+  utilizationRate?: number;
+  completionRate?: number;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
 export interface PaginatedRequestResponse {
   content: Request[];
   pageInfo: {

@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { redirect, useRouter } from 'next/navigation';
 import { 
   LayoutDashboard, QrCode, FileText, Store, 
-  BarChart3, Users, Settings as SettingsIcon, Building, Package, LogOut, CheckCircle, Shield
+  BarChart3, Users, Settings as SettingsIcon, Building, Package, LogOut, CheckCircle, Shield, BatteryFull
 } from 'lucide-react';
 import { useUser } from '@/contexts/user-context';
 import api, { setAccessToken } from '@/services/axiosInstance';
@@ -23,8 +23,9 @@ import Reports from '../../components/Reports';
 import Settings from '../../components/Settings';
 import KYCManagement from '../../components/KYCManagement';
 import AuditManagement from '../../components/AuditManagement';
+import CampaignManagement from '@/components/CampaignManagement';
 
-type Page = 'dashboard' | 'qr-management' | 'requests' | 'sales' | 'merchants' | 'reports' | 'users' | 'branches' | 'inventory' | 'settings' | 'kyc' | 'audit';
+type Page = 'dashboard' | 'qr-management' | 'requests' | 'sales' | 'merchants' | 'reports' | 'users' | 'branches' | 'inventory' | 'settings' | 'kyc' | 'audit' | 'campaigns';
 
 export default function DashboardPage() {
   const [currentPage, setCurrentPage] = useState<Page>('dashboard');
@@ -115,6 +116,8 @@ export default function DashboardPage() {
         return <KYCManagement user={compatibleUser} />;
       case 'audit':
         return <AuditManagement user={compatibleUser} />;
+      case 'campaigns':
+        return <CampaignManagement user={compatibleUser} />;
       default:
         return <Dashboard user={compatibleUser} />;
     }
@@ -135,7 +138,8 @@ export default function DashboardPage() {
         { id: 'branches', name: 'Branch Management', icon: Building },
         { id: 'users', name: 'User Management', icon: Users },
         { id: 'reports', name: 'Reports', icon: BarChart3 },
-        { id: 'settings', name: 'Settings', icon: SettingsIcon }
+        { id: 'settings', name: 'Settings', icon: SettingsIcon },
+        { id: 'campaigns', name: 'Campaigns', icon: BatteryFull }
       ];
     }
 
@@ -147,7 +151,8 @@ export default function DashboardPage() {
         { id: 'requests', name: 'Request Management', icon: FileText },
         { id: 'sales', name: 'Sales Management', icon: Store },
         { id: 'merchants', name: 'Merchants', icon: Store },
-        { id: 'reports', name: 'Reports', icon: BarChart3 }
+        { id: 'reports', name: 'Reports', icon: BarChart3 },
+        { id: 'campaigns', name: 'Campaigns', icon: BatteryFull }
       ];
     }
 
@@ -165,9 +170,9 @@ export default function DashboardPage() {
         ...baseItems,
         { id: 'requests', name: 'My Requests', icon: FileText },
         { id: 'merchants', name: 'Merchants', icon: Store },
-        // { id: 'qr-management', name: 'QR Management', icon: QrCode },
+        { id: 'qr-management', name: 'QR Management', icon: QrCode },
         { id: 'sales', name: 'Sales Management', icon: Store },
-
+        { id: 'campaigns', name: 'Campaigns', icon: BatteryFull }
       ];
     }
 

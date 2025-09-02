@@ -124,7 +124,7 @@ const QRManagement: React.FC<QRManagementProps> = ({ user }) => {
 
   const [branches, setBranches] = useState<BranchResponseDto[]>([]);
 
-  const canManageQRs = user.role === 'SUPER_ADMIN';
+  const canManageQRs = user.role === 'SUPER_ADMIN'|| user.role === 'BRANCH_MANAGER'|| user.role === 'SALES_USER';
 
   useEffect(() => {
     if (canManageQRs) {
