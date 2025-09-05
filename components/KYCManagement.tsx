@@ -1,3 +1,5 @@
+'use client';
+
 import React, { useState, useEffect } from 'react';
 import { 
   CheckCircle, Clock, XCircle, FileText, User as UserIcon, 
@@ -5,19 +7,53 @@ import {
   AlertTriangle, Mail, Phone, MapPin, Shield
 } from 'lucide-react';
 import { User, KYCRequest, Merchant } from '../types';
-import { apiService } from '../services/api';
+import { kycApiService } from '@/services/kyc-api';
+import { merchantApiService } from '@/services/merchant-api';
+import { useDebounce } from '@/hooks/useDebounce';
+import {
+  Pagination,
+  PaginationContent,
+  PaginationEllipsis,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
 
 interface KYCManagementProps {
   user: User;
 }
 
+interface PaginatedKYCResponse {
+  content: KYCRequest[];
+  pageInfo: {
+    pageNumber: number;
+    pageSize: number;
+    totalElements: number;
+    totalPages: number;
+    first: boolean;
+    last: boolean;
+    hasNext: boolean;
+    hasPrevious: boolean;
+  };
+}
+
 const KYCManagement: React.FC<KYCManagementProps> = ({ user }) => {
-  const [kycRequests, setKYCRequests] = useState<KYCRequest[]>([]);
-  const [merchants, setMerchants] = useState<Merchant[]>([]);
+  const [kycData, setKYCData] = useState<PaginatedKYCResponse | null>(null);
+  const [merchants, setMerchants] = useState<Map<number, Merchant>>(new Map());
   const [loading, setLoading] = useState(true);
   const [showReviewModal, setShowReviewModal] = useState(false);
   const [selectedRequest, setSelectedRequest] = useState<KYCRequest | null>(null);
+  
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(0);
+  const [pageSize, setPageSize] = useState(10);
+  const [sortBy, setSortBy] = useState('createdAt');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+  
+  // Filter state
   const [filters, setFilters] = useState({ search: '', status: '' });
+  const debouncedSearch = useDebounce(filters.search, 500);
   
   // Review form state
   const [reviewForm, setReviewForm] = useState({
@@ -29,28 +65,63 @@ const KYCManagement: React.FC<KYCManagementProps> = ({ user }) => {
   const isBranchApprover = user.role === 'BRANCH_APPROVER';
   const isAdmin = user.role === 'SUPER_ADMIN';
 
-  useEffect(() => {
-    if (isBranchApprover || isAdmin) {
-      loadData();
-    }
-  }, [isBranchApprover, isAdmin]);
-
-  const loadData = async () => {
-    setLoading(true);
+  // Fetch KYC requests with pagination
+  const fetchKYCRequests = async () => {
     try {
-      const [kycData, merchantsData] = await Promise.all([
-        apiService.getKYCRequests(isBranchApprover ? user.branchId : undefined),
-        apiService.getMerchants(isBranchApprover ? user.branchId : undefined)
-      ]);
+      setLoading(true);
       
-      setKYCRequests(kycData);
-      setMerchants(merchantsData);
+      const response = await kycApiService.getKYCRequests({
+        page: currentPage,
+        size: pageSize,
+        sortBy,
+        sortDir,
+        ...(debouncedSearch && { search: debouncedSearch }),
+        ...(filters.status && { status: filters.status })
+      });
+      
+      setKYCData(response);
     } catch (error) {
-      console.error('Failed to load KYC data:', error);
+      console.error('Failed to load KYC requests:', error);
+      setKYCData(null);
     } finally {
       setLoading(false);
     }
   };
+
+  // Fetch merchant details for KYC requests
+  const fetchMerchantDetails = async () => {
+    if (!kycData?.content) return;
+    
+    try {
+      const merchantIds = [...new Set(kycData.content.map(request => request.merchantId))];
+      const merchantMap = new Map<number, Merchant>();
+      
+      // Fetch merchant details in parallel
+      const merchantPromises = merchantIds.map(async (id) => {
+        try {
+          const merchant = await merchantApiService.getMerchant(id);
+          merchantMap.set(id, merchant);
+        } catch (error) {
+          console.error(`Failed to fetch merchant ${id}:`, error);
+        }
+      });
+      
+      await Promise.all(merchantPromises);
+      setMerchants(merchantMap);
+    } catch (error) {
+      console.error('Failed to load merchant details:', error);
+    }
+  };
+
+  useEffect(() => {
+    if (isBranchApprover || isAdmin) {
+      fetchKYCRequests();
+    }
+  }, [isBranchApprover, isAdmin, currentPage, pageSize, sortBy, sortDir, debouncedSearch, filters.status]);
+
+  useEffect(() => {
+    fetchMerchantDetails();
+  }, [kycData]);
 
   const handleKYCReview = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -59,17 +130,18 @@ const KYCManagement: React.FC<KYCManagementProps> = ({ user }) => {
     setReviewing(true);
     try {
       if (reviewForm.action === 'approve') {
-        await apiService.approveKYCRequest(selectedRequest.id, reviewForm.notes);
+        await kycApiService.approveKYCRequest(selectedRequest.id, reviewForm.notes);
       } else {
-        await apiService.rejectKYCRequest(selectedRequest.id, reviewForm.notes);
+        await kycApiService.rejectKYCRequest(selectedRequest.id, reviewForm.notes);
       }
       
       setShowReviewModal(false);
       setSelectedRequest(null);
       resetReviewForm();
-      loadData();
+      fetchKYCRequests();
     } catch (error) {
       console.error('Failed to review KYC request:', error);
+      alert(error instanceof Error ? error.message : 'Failed to review KYC request');
     } finally {
       setReviewing(false);
     }
@@ -82,8 +154,8 @@ const KYCManagement: React.FC<KYCManagementProps> = ({ user }) => {
     });
   };
 
-  const getMerchantInfo = (merchantId: string) => {
-    return merchants.find(m => m.id === merchantId);
+  const getMerchantInfo = (merchantId: number): Merchant | undefined => {
+    return merchants.get(merchantId);
   };
 
   const getStatusBadge = (status: string) => {
@@ -109,16 +181,34 @@ const KYCManagement: React.FC<KYCManagementProps> = ({ user }) => {
     );
   };
 
-  const filteredRequests = kycRequests.filter(request => {
-    const merchant = getMerchantInfo(request.merchantId);
-    const matchesSearch = !filters.search || 
-      merchant?.shopName.toLowerCase().includes(filters.search.toLowerCase()) ||
-      merchant?.legalName.toLowerCase().includes(filters.search.toLowerCase());
+  // Handle page changes
+  const handlePageChange = (page: number) => {
+    setCurrentPage(page);
+  };
+
+  // Generate page numbers for pagination
+  const generatePageNumbers = () => {
+    if (!kycData?.pageInfo) return [];
     
-    const matchesStatus = !filters.status || request.status === filters.status;
+    const { pageNumber, totalPages } = kycData.pageInfo;
+    const pages = [];
+    const maxVisible = 5;
     
-    return matchesSearch && matchesStatus;
-  });
+    let start = Math.max(0, pageNumber - Math.floor(maxVisible / 2));
+    let end = Math.min(totalPages - 1, start + maxVisible - 1);
+    
+    if (end - start + 1 < maxVisible) {
+      start = Math.max(0, end - maxVisible + 1);
+    }
+    
+    for (let i = start; i <= end; i++) {
+      pages.push(i);
+    }
+    
+    return pages;
+  };
+
+  const filteredRequests = kycData?.content || [];
 
   if (!isBranchApprover && !isAdmin) {
     return (
@@ -147,7 +237,7 @@ const KYCManagement: React.FC<KYCManagementProps> = ({ user }) => {
             <Clock className="h-8 w-8 text-yellow-600 bg-yellow-100 rounded-lg p-2" />
             <div>
               <p className="text-2xl font-bold text-gray-900">
-                {kycRequests.filter(r => r.status === 'pending').length}
+                {filteredRequests.filter(r => r.status === 'pending').length}
               </p>
               <p className="text-sm text-gray-600">Pending Review</p>
             </div>
@@ -159,7 +249,7 @@ const KYCManagement: React.FC<KYCManagementProps> = ({ user }) => {
             <CheckCircle className="h-8 w-8 text-emerald-600 bg-emerald-100 rounded-lg p-2" />
             <div>
               <p className="text-2xl font-bold text-gray-900">
-                {kycRequests.filter(r => r.status === 'approved').length}
+                {filteredRequests.filter(r => r.status === 'approved').length}
               </p>
               <p className="text-sm text-gray-600">Approved</p>
             </div>
@@ -171,7 +261,7 @@ const KYCManagement: React.FC<KYCManagementProps> = ({ user }) => {
             <XCircle className="h-8 w-8 text-red-600 bg-red-100 rounded-lg p-2" />
             <div>
               <p className="text-2xl font-bold text-gray-900">
-                {kycRequests.filter(r => r.status === 'rejected').length}
+                {filteredRequests.filter(r => r.status === 'rejected').length}
               </p>
               <p className="text-sm text-gray-600">Rejected</p>
             </div>
@@ -182,7 +272,7 @@ const KYCManagement: React.FC<KYCManagementProps> = ({ user }) => {
           <div className="flex items-center space-x-3">
             <FileText className="h-8 w-8 text-blue-600 bg-blue-100 rounded-lg p-2" />
             <div>
-              <p className="text-2xl font-bold text-gray-900">{kycRequests.length}</p>
+              <p className="text-2xl font-bold text-gray-900">{filteredRequests.length}</p>
               <p className="text-sm text-gray-600">Total Requests</p>
             </div>
           </div>
@@ -231,7 +321,7 @@ const KYCManagement: React.FC<KYCManagementProps> = ({ user }) => {
           <div className="text-center py-12">
             <Shield className="mx-auto h-12 w-12 text-gray-400 mb-4" />
             <h3 className="text-lg font-medium text-gray-900 mb-2">No KYC requests found</h3>
-            <p className="text-gray-600">No KYC verification requests are currently pending review.</p>
+            <p className="text-gray-600">No KYC verification requests match your current filters.</p>
           </div>
         ) : (
           <div className="divide-y divide-gray-200">
@@ -329,6 +419,13 @@ const KYCManagement: React.FC<KYCManagementProps> = ({ user }) => {
                             </div>
                           </div>
                         )}
+                        
+                        {request.additionalNotes && (
+                          <div className="mt-3 pt-3 border-t border-blue-200">
+                            <p className="text-sm font-medium text-gray-900 mb-2">Additional Notes</p>
+                            <p className="text-xs text-gray-600">{request.additionalNotes}</p>
+                          </div>
+                        )}
                       </div>
                       
                       {/* Request Timeline */}
@@ -375,7 +472,7 @@ const KYCManagement: React.FC<KYCManagementProps> = ({ user }) => {
                           <div className="flex items-center space-x-2">
                             <UserIcon className="h-4 w-4 text-gray-400" />
                             <span className="text-sm font-medium text-gray-700">
-                              {request.reviewedBy || 'System'}
+                              {request.reviewedByName || 'System'}
                             </span>
                           </div>
                         </div>
@@ -388,6 +485,56 @@ const KYCManagement: React.FC<KYCManagementProps> = ({ user }) => {
           </div>
         )}
       </div>
+
+      {/* Pagination */}
+      {kycData && kycData.pageInfo && kycData.pageInfo.totalPages > 1 && (
+        <div className="flex justify-center">
+          <Pagination>
+            <PaginationContent>
+              <PaginationItem>
+                <PaginationPrevious 
+                  href="#"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    if (!kycData.pageInfo.first) {
+                      handlePageChange(currentPage - 1);
+                    }
+                  }}
+                  className={kycData.pageInfo.first ? 'pointer-events-none opacity-50' : ''}
+                />
+              </PaginationItem>
+              
+              {generatePageNumbers().map((pageNum) => (
+                <PaginationItem key={pageNum}>
+                  <PaginationLink
+                    href="#"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      handlePageChange(pageNum);
+                    }}
+                    isActive={pageNum === currentPage}
+                  >
+                    {pageNum + 1}
+                  </PaginationLink>
+                </PaginationItem>
+              ))}
+              
+              <PaginationItem>
+                <PaginationNext 
+                  href="#"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    if (!kycData.pageInfo.last) {
+                      handlePageChange(currentPage + 1);
+                    }
+                  }}
+                  className={kycData.pageInfo.last ? 'pointer-events-none opacity-50' : ''}
+                />
+              </PaginationItem>
+            </PaginationContent>
+          </Pagination>
+        </div>
+      )}
 
       {/* KYC Review Modal */}
       {showReviewModal && selectedRequest && (

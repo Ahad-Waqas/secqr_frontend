@@ -51,7 +51,7 @@ export interface QRCode {
 }
 
 export interface Merchant {
-  id: string;
+  id: number;
   legalName: string;
   shopName: string;
   merchantIdInCore?: string;
@@ -59,8 +59,14 @@ export interface Merchant {
   phone: string;
   email: string;
   kycStatus: 'pending' | 'verified' | 'rejected';
-  branchId?: string;
+  branchId: number;
+  branchName?: string;
+  branchCode?: string;
+  createdById?: number;
+  createdByName?: string;
   createdAt: string;
+  updatedAt?: string;
+  isActive?: boolean;
 }
 
 // Backend Request interfaces
@@ -465,21 +471,30 @@ export interface MerchantRequest {
 }
 
 export interface KYCRequest {
-  id: string;
-  merchantId: string;
-  requestedBy: string;
-  branchId: string;
+  id: number;
+  requestCode: string;
+  merchantId: number;
+  merchantName?: string;
+  merchantLegalName?: string;
+  branchId: number;
+  branchName?: string;
+  branchCode?: string;
+  submittedById: number;
+  submittedByName?: string;
+  reviewedById?: number;
+  reviewedByName?: string;
   status: 'pending' | 'approved' | 'rejected';
   documents: {
-    businessLicense?: string;
-    taxCertificate?: string;
-    bankStatement?: string;
-    ownershipProof?: string;
+    businessLicense: string;
+    taxCertificate: string;
+    bankStatement: string;
+    ownershipProof: string;
     additionalDocs?: string[];
   };
+  additionalNotes?: string;
   reviewNotes?: string;
-  reviewedBy?: string;
-  reviewedAt?: string;
   createdAt: string;
   updatedAt: string;
+  reviewedAt?: string;
+  isActive?: boolean;
 }

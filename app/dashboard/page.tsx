@@ -136,6 +136,7 @@ export default function DashboardPage() {
         { id: 'requests', name: 'Request Management', icon: FileText },
         // { id: 'sales', name: 'Sales Management', icon: Store },
         { id: 'branches', name: 'Branch Management', icon: Building },
+        { id: 'merchants', name: 'Merchant Management', icon: Store },
         { id: 'users', name: 'User Management', icon: Users },
         { id: 'reports', name: 'Reports', icon: BarChart3 },
         { id: 'settings', name: 'Settings', icon: SettingsIcon },
